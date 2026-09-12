@@ -87,7 +87,7 @@ function NumberField({ label, value, onChange, suffix, min = 0, step = 1 }: {
     <label className="field">
       <span>{label}</span>
       <span className="number-input">
-        <input min={min} step={step} type="number" value={Number.isInteger(value) ? value : Number(value.toFixed(3))}
+        <input aria-label={label} min={min} step={step} type="number" value={Number.isInteger(value) ? value : Number(value.toFixed(3))}
           onChange={(event) => onChange(Math.max(min, Number(event.target.value) || 0))} />
         <small>{suffix}</small>
       </span>
