@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  BrickWall, Check, ChevronDown, DoorOpen, Grid3X3, MousePointer2, PencilRuler,
+  BrickWall, Check, ChevronDown, DoorOpen, Grid3X3, Hand, MousePointer2, PencilRuler,
   Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Undo2,
   ZoomIn, ZoomOut,
 } from "lucide-react";
@@ -9,10 +9,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Point = { x: number; y: number };
 type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
-type Tool = "select" | "room" | "wall" | "opening";
+type Tool = "select" | "pan" | "room" | "wall" | "opening";
+type MaterialUnit = "in" | "mm" | "cm";
+type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
 type DragState =
   | { kind: "draw"; start: Point; current: Point }
   | { kind: "endpoint"; id: string; endpoint: "start" | "end" }
+  | { kind: "item"; id: string; anchor: Point; originalStart: Point; originalEnd: Point }
+  | { kind: "pan"; clientX: number; clientY: number; origin: Point }
   | null;
 type Snapshot = { room: Point[]; items: DrawItem[] };
 
@@ -25,9 +29,35 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const distance = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
 const formatLength = (inches: number) => {
-  const rounded = Math.max(0, Math.round(inches));
-  return `${Math.floor(rounded / 12)}′ ${rounded % 12}″`;
+  const eighths = Math.max(0, Math.round(inches * 8));
+  const feet = Math.floor(eighths / 96);
+  const remainder = eighths % 96;
+  const wholeInches = Math.floor(remainder / 8);
+  const fraction = remainder % 8;
+  const divisor = fraction === 0 ? 1 : fraction % 4 === 0 ? 4 : fraction % 2 === 0 ? 2 : 1;
+  const fractionLabel = fraction ? ` ${fraction / divisor}/${8 / divisor}` : "";
+  return `${feet}′ ${wholeInches}${fractionLabel}″`;
 };
+const parseLength = (value: string) => {
+  const normalized = value.trim().toLowerCase().replace(/feet|foot|ft/g, "'").replace(/inches|inch|in/g, '"');
+  if (!normalized) return null;
+  if (!normalized.includes("'") && !normalized.includes('"')) {
+    const plain = Number(normalized);
+    return Number.isFinite(plain) ? plain : null;
+  }
+  const feetMatch = normalized.match(/(-?\d+(?:\.\d+)?)\s*'/);
+  const afterFeet = feetMatch ? normalized.slice((feetMatch.index ?? 0) + feetMatch[0].length) : normalized;
+  const inchMatch = afterFeet.match(/(-?\d+(?:\.\d+)?)(?:\s+(\d+)\/(\d+))?\s*"?/);
+  const fractionOnly = afterFeet.match(/(\d+)\/(\d+)/);
+  const feet = feetMatch ? Number(feetMatch[1]) : 0;
+  let inches = inchMatch ? Number(inchMatch[1]) : 0;
+  if (inchMatch?.[2] && inchMatch[3]) inches += Number(inchMatch[2]) / Number(inchMatch[3]);
+  else if (!inchMatch && fractionOnly) inches += Number(fractionOnly[1]) / Number(fractionOnly[2]);
+  const result = feet * 12 + inches;
+  return Number.isFinite(result) ? result : null;
+};
+const displayUnit = (inches: number, unit: MaterialUnit) => unit === "in" ? inches : unit === "mm" ? inches * 25.4 : inches * 2.54;
+const inchesFromUnit = (value: number, unit: MaterialUnit) => unit === "in" ? value : unit === "mm" ? value / 25.4 : value / 2.54;
 const polygonArea = (points: Point[]) => Math.abs(points.reduce((sum, point, index) => {
   const next = points[(index + 1) % points.length];
   return sum + point.x * next.y - next.x * point.y;
@@ -95,6 +125,36 @@ function NumberField({ label, value, onChange, suffix, min = 0, step = 1 }: {
   );
 }
 
+function EditableDimension({ inches, label, onCommit }: { inches: number; label: string; onCommit: (inches: number) => void }) {
+  const rounded = Math.max(0, Math.round(inches * 8) / 8);
+  return (
+    <input
+      key={`${label}-${rounded}`}
+      className="canvas-dimension-input"
+      aria-label={label}
+      defaultValue={formatLength(rounded)}
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+      }}
+      onBlur={(event) => {
+        const parsed = parseLength(event.currentTarget.value);
+        if (parsed !== null && parsed >= 0) onCommit(parsed);
+        else event.currentTarget.value = formatLength(rounded);
+      }}
+    />
+  );
+}
+
+function mortarRecommendation(tileWidth: number, tileHeight: number) {
+  const longest = Math.max(tileWidth, tileHeight);
+  if (longest <= 2) return { trowel: "3/16″ V-notch", coverage: 90 };
+  if (longest <= 6) return { trowel: "1/4″ × 1/4″ square-notch", coverage: 70 };
+  if (longest <= 15) return { trowel: "1/4″ × 3/8″ square-notch", coverage: 55 };
+  if (longest <= 24) return { trowel: "1/2″ × 1/2″ square-notch", coverage: 40 };
+  return { trowel: "1/2″ × 1/2″ or larger", coverage: 32 };
+}
+
 export function LayoutPlanner() {
   const [projectName, setProjectName] = useState("Untitled bathroom");
   const [room, setRoom] = useState<Point[]>(DEFAULT_ROOM);
@@ -109,11 +169,15 @@ export function LayoutPlanner() {
   const [tileWidth, setTileWidth] = useState(12);
   const [tileHeight, setTileHeight] = useState(24);
   const [grout, setGrout] = useState(0.125);
+  const [materialUnit, setMaterialUnit] = useState<MaterialUnit>("in");
+  const [tileAppearance, setTileAppearance] = useState<TileAppearance>("transparent");
+  const [wastePercent, setWastePercent] = useState(10);
   const [wallThickness, setWallThickness] = useState(4.5);
   const [origin, setOrigin] = useState<Point>({ x: 0, y: 0 });
   const [rotation, setRotation] = useState<0 | 90>(0);
   const [showTile, setShowTile] = useState(true);
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [saved, setSaved] = useState(true);
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [future, setFuture] = useState<Snapshot[]>([]);
@@ -126,7 +190,10 @@ export function LayoutPlanner() {
   const roomHeight = bounds.maxY - bounds.minY;
   const areaSqFt = polygonArea(room) / 144;
   const tileSqFt = (tileWidth * tileHeight) / 144;
-  const tileCount = tileSqFt ? Math.ceil((areaSqFt / tileSqFt) * 1.1) : 0;
+  const wasteMultiplier = 1 + wastePercent / 100;
+  const tileCount = tileSqFt ? Math.ceil((areaSqFt / tileSqFt) * wasteMultiplier) : 0;
+  const mortar = mortarRecommendation(tileWidth, tileHeight);
+  const mortarBags = Math.max(1, Math.ceil((areaSqFt * wasteMultiplier) / mortar.coverage));
   const xCuts = useMemo(() => balancedOffset(roomWidth, actualTileW, grout), [roomWidth, actualTileW, grout]);
   const yCuts = useMemo(() => balancedOffset(roomHeight, actualTileH, grout), [roomHeight, actualTileH, grout]);
   const currentXCuts = useMemo(() => edgeCuts(roomWidth, actualTileW, grout, origin.x), [roomWidth, actualTileW, grout, origin.x]);
@@ -146,13 +213,16 @@ export function LayoutPlanner() {
     if (!stored) return;
     const timer = window.setTimeout(() => {
       try {
-      const parsed = JSON.parse(stored) as Snapshot & { projectName?: string; tileWidth?: number; tileHeight?: number; grout?: number; origin?: Point; rotation?: 0 | 90 };
+        const parsed = JSON.parse(stored) as Snapshot & { projectName?: string; tileWidth?: number; tileHeight?: number; grout?: number; origin?: Point; rotation?: 0 | 90; materialUnit?: MaterialUnit; tileAppearance?: TileAppearance; wastePercent?: number };
         if (parsed.projectName) setProjectName(parsed.projectName);
         if (parsed.room?.length >= 3) setRoom(parsed.room);
         if (parsed.items) setItems(parsed.items);
         if (parsed.tileWidth) setTileWidth(parsed.tileWidth);
         if (parsed.tileHeight) setTileHeight(parsed.tileHeight);
         if (parsed.grout) setGrout(parsed.grout);
+        if (parsed.materialUnit) setMaterialUnit(parsed.materialUnit);
+        if (parsed.tileAppearance) setTileAppearance(parsed.tileAppearance);
+        if (parsed.wastePercent !== undefined) setWastePercent(parsed.wastePercent);
         if (parsed.origin) setOrigin(parsed.origin);
         if (parsed.rotation !== undefined) setRotation(parsed.rotation);
       } catch { /* Ignore a malformed old draft. */ }
@@ -162,24 +232,42 @@ export function LayoutPlanner() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      window.localStorage.setItem("layout-draft-v1", JSON.stringify({ projectName, room, items, tileWidth, tileHeight, grout, origin, rotation }));
+      window.localStorage.setItem("layout-draft-v1", JSON.stringify({ projectName, room, items, tileWidth, tileHeight, grout, materialUnit, tileAppearance, wastePercent, origin, rotation }));
       setSaved(true);
     }, 450);
     return () => window.clearTimeout(timer);
-  }, [projectName, room, items, tileWidth, tileHeight, grout, origin, rotation]);
+  }, [projectName, room, items, tileWidth, tileHeight, grout, materialUnit, tileAppearance, wastePercent, origin, rotation]);
 
-  const pointerPoint = (event: React.PointerEvent<SVGSVGElement>): Point => {
-    const rect = event.currentTarget.getBoundingClientRect();
+  const clientPoint = (clientX: number, clientY: number): Point => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
     const visibleW = VIEW_W / zoom;
     const visibleH = VIEW_H / zoom;
     return {
-      x: Math.round(clamp((event.clientX - rect.left) * visibleW / rect.width, 0, visibleW)),
-      y: Math.round(clamp((event.clientY - rect.top) * visibleH / rect.height, 0, visibleH)),
+      x: Math.round(clamp(pan.x + (clientX - rect.left) * visibleW / rect.width, 0, VIEW_W)),
+      y: Math.round(clamp(pan.y + (clientY - rect.top) * visibleH / rect.height, 0, VIEW_H)),
     };
+  };
+  const pointerPoint = (event: React.PointerEvent<SVGSVGElement>) => clientPoint(event.clientX, event.clientY);
+
+  const changeZoom = (nextZoom: number) => {
+    const clampedZoom = clamp(nextZoom, 0.75, 2.5);
+    const center = { x: pan.x + VIEW_W / zoom / 2, y: pan.y + VIEW_H / zoom / 2 };
+    const nextVisible = { x: VIEW_W / clampedZoom, y: VIEW_H / clampedZoom };
+    setPan({
+      x: clamp(center.x - nextVisible.x / 2, 0, Math.max(0, VIEW_W - nextVisible.x)),
+      y: clamp(center.y - nextVisible.y / 2, 0, Math.max(0, VIEW_H - nextVisible.y)),
+    });
+    setZoom(clampedZoom);
   };
 
   const startDrawing = (event: React.PointerEvent<SVGSVGElement>) => {
     const point = pointerPoint(event);
+    if (tool === "pan") {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setDrag({ kind: "pan", clientX: event.clientX, clientY: event.clientY, origin: pan });
+      return;
+    }
     if (tool === "room") { setDraftRoom((current) => [...current, point]); return; }
     if (tool === "wall" || tool === "opening") {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -190,15 +278,44 @@ export function LayoutPlanner() {
 
   const movePointer = (event: React.PointerEvent<SVGSVGElement>) => {
     if (!drag) return;
+    if (drag.kind === "pan") {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const visibleW = VIEW_W / zoom;
+      const visibleH = VIEW_H / zoom;
+      setPan({
+        x: clamp(drag.origin.x - (event.clientX - drag.clientX) * visibleW / rect.width, 0, Math.max(0, VIEW_W - visibleW)),
+        y: clamp(drag.origin.y - (event.clientY - drag.clientY) * visibleH / rect.height, 0, Math.max(0, VIEW_H - visibleH)),
+      });
+      return;
+    }
     const point = pointerPoint(event);
     if (drag.kind === "draw") {
       const dx = Math.abs(point.x - drag.start.x);
       const dy = Math.abs(point.y - drag.start.y);
-      const snapped = event.shiftKey ? (dx > dy ? { x: point.x, y: drag.start.y } : { x: drag.start.x, y: point.y }) : point;
+      const snapped = !event.altKey ? (dx > dy ? { x: point.x, y: drag.start.y } : { x: drag.start.x, y: point.y }) : point;
       setDrag({ ...drag, current: snapped });
       return;
     }
-    setItems((current) => current.map((item) => item.id === drag.id ? { ...item, [drag.endpoint]: point } : item));
+    if (drag.kind === "item") {
+      const dx = point.x - drag.anchor.x;
+      const dy = point.y - drag.anchor.y;
+      setItems((current) => current.map((item) => item.id === drag.id ? {
+        ...item,
+        start: { x: drag.originalStart.x + dx, y: drag.originalStart.y + dy },
+        end: { x: drag.originalEnd.x + dx, y: drag.originalEnd.y + dy },
+      } : item));
+      return;
+    }
+    setItems((current) => current.map((item) => {
+      if (item.id !== drag.id) return item;
+      const other = drag.endpoint === "start" ? item.end : item.start;
+      const dx = Math.abs(point.x - other.x);
+      const dy = Math.abs(point.y - other.y);
+      const snapped = item.type === "wall" && !event.altKey
+        ? (dx > dy ? { x: point.x, y: other.y } : { x: other.x, y: point.y })
+        : point;
+      return { ...item, [drag.endpoint]: snapped };
+    }));
   };
 
   const endPointer = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -216,6 +333,14 @@ export function LayoutPlanner() {
 
   const beginEndpointDrag = (event: React.PointerEvent<SVGCircleElement>, id: string, endpoint: "start" | "end") => {
     event.stopPropagation(); snapshot(); svgRef.current?.setPointerCapture(event.pointerId); setDrag({ kind: "endpoint", id, endpoint });
+  };
+  const beginItemDrag = (event: React.PointerEvent<SVGGElement>, item: DrawItem) => {
+    if (tool !== "select") return;
+    event.stopPropagation();
+    snapshot();
+    setSelectedId(item.id);
+    svgRef.current?.setPointerCapture(event.pointerId);
+    setDrag({ kind: "item", id: item.id, anchor: clientPoint(event.clientX, event.clientY), originalStart: item.start, originalEnd: item.end });
   };
   const finishRoom = () => { if (draftRoom.length < 3) return; snapshot(); setRoom(draftRoom); setDraftRoom([]); setTool("select"); };
   const cancelRoom = () => { setDraftRoom([]); setTool("select"); };
@@ -269,6 +394,52 @@ export function LayoutPlanner() {
   const pitchY = actualTileH + grout;
   const startX = patternX + Math.floor(((bounds.minX + bounds.maxX) / 2 - patternX) / pitchX) * pitchX;
   const startY = patternY + Math.floor(((bounds.minY + bounds.maxY) / 2 - patternY) / pitchY) * pitchY;
+  const startLeftReference = Math.max(0, startX - bounds.minX);
+  const startTopReference = Math.max(0, startY - bounds.minY);
+  const selectedWallOrientation = selected?.type === "wall"
+    ? Math.abs(selected.end.x - selected.start.x) < 1
+      ? "vertical"
+      : Math.abs(selected.end.y - selected.start.y) < 1
+        ? "horizontal"
+        : null
+    : null;
+  const selectedWallMidpoint = selected ? {
+    x: (selected.start.x + selected.end.x) / 2,
+    y: (selected.start.y + selected.end.y) / 2,
+  } : null;
+  const setWallOffset = (side: "left" | "right" | "top" | "bottom", value: number) => {
+    if (!selected || selected.type !== "wall" || !selectedWallMidpoint) return;
+    snapshot();
+    if (side === "left" || side === "right") {
+      const target = side === "left" ? bounds.minX + value : bounds.maxX - value;
+      const delta = target - selectedWallMidpoint.x;
+      setItems((current) => current.map((item) => item.id === selected.id ? {
+        ...item,
+        start: { ...item.start, x: item.start.x + delta },
+        end: { ...item.end, x: item.end.x + delta },
+      } : item));
+    } else {
+      const target = side === "top" ? bounds.minY + value : bounds.maxY - value;
+      const delta = target - selectedWallMidpoint.y;
+      setItems((current) => current.map((item) => item.id === selected.id ? {
+        ...item,
+        start: { ...item.start, y: item.start.y + delta },
+        end: { ...item.end, y: item.end.y + delta },
+      } : item));
+    }
+  };
+  const tileFill = {
+    transparent: "#d4b477",
+    porcelain: "#ece9df",
+    stone: "url(#stone-fill)",
+    marble: "url(#marble-fill)",
+    concrete: "url(#concrete-fill)",
+  }[tileAppearance];
+  const tileOpacity = tileAppearance === "transparent" ? .2 : .88;
+  const materialMin = materialUnit === "in" ? 1 : materialUnit === "mm" ? 25.4 : 2.54;
+  const materialStep = materialUnit === "in" ? .125 : materialUnit === "mm" ? 1 : .1;
+  const groutMin = materialUnit === "in" ? .0625 : materialUnit === "mm" ? 1 : .1;
+  const groutStep = materialUnit === "in" ? .0625 : materialUnit === "mm" ? .5 : .05;
 
   return (
     <main className="app-shell">
@@ -290,7 +461,7 @@ export function LayoutPlanner() {
 
       <section className="workspace">
         <nav className="toolrail" aria-label="Drawing tools">
-          {([ ["select", MousePointer2, "Select"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"] ] as const).map(([value, Icon, label]) => (
+          {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"] ] as const).map(([value, Icon, label]) => (
             <button key={value} className={tool === value ? "active" : ""} onClick={() => { setTool(value); setDraftRoom([]); setSelectedId(null); }} aria-pressed={tool === value}>
               <Icon size={21} /><span>{label}</span>
             </button>
@@ -300,26 +471,38 @@ export function LayoutPlanner() {
         <section className="canvas-column">
           <div className="canvas-toolbar">
             <div className="mode-copy">
-              <strong>{{ select: "Select and adjust", wall: "Draw a wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
-              <span>{{ select: "Tap a line, then drag either end to resize it.", wall: "Drag a line. Hold Shift for perfectly straight walls.", opening: "Drag across a doorway or passage.", room: "Tap each corner, then finish the room." }[tool]}</span>
+              <strong>{{ select: "Select and adjust", pan: "Move around the plan", wall: "Draw a straight wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
+              <span>{{ select: "Drag a selected wall to move it, or drag either end to resize it.", pan: "Drag the work area after zooming in.", wall: "Walls snap straight. Hold Alt only when you need an angle.", opening: "Openings snap straight along the wall.", room: "Tap each corner, then finish the room." }[tool]}</span>
             </div>
             {tool === "room" && <div className="draft-actions"><button className="text-button" onClick={cancelRoom}>Cancel</button><button className="primary small" disabled={draftRoom.length < 3} onClick={finishRoom}>Finish room</button></div>}
             <div className="zoom-controls">
-              <button onClick={() => setZoom((value) => clamp(value - 0.1, 0.8, 1.25))} aria-label="Zoom out"><ZoomOut size={17} /></button>
+              <button onClick={() => changeZoom(zoom - 0.2)} aria-label="Zoom out"><ZoomOut size={17} /></button>
               <span>{Math.round(zoom * 100)}%</span>
-              <button onClick={() => setZoom((value) => clamp(value + 0.1, 0.8, 1.25))} aria-label="Zoom in"><ZoomIn size={17} /></button>
+              <button onClick={() => changeZoom(zoom + 0.2)} aria-label="Zoom in"><ZoomIn size={17} /></button>
+              <button className="fit-button" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} aria-label="Fit plan">Fit</button>
             </div>
           </div>
 
           <div className={`canvas-wrap tool-${tool}`}>
-            <svg ref={svgRef} className="drawing-canvas" viewBox={`0 0 ${VIEW_W / zoom} ${VIEW_H / zoom}`}
+            <svg ref={svgRef} className="drawing-canvas" viewBox={`${pan.x} ${pan.y} ${VIEW_W / zoom} ${VIEW_H / zoom}`}
               onPointerDown={startDrawing} onPointerMove={movePointer} onPointerUp={endPointer}
+              onWheel={(event) => { event.preventDefault(); changeZoom(zoom * (event.deltaY > 0 ? .9 : 1.1)); }}
               role="img" aria-label="Editable floor plan and tile layout">
               <defs>
                 <pattern id="minor-grid" width="3" height="3" patternUnits="userSpaceOnUse"><path d="M 3 0 L 0 0 0 3" fill="none" stroke="#d9dfdb" strokeWidth=".25" /></pattern>
                 <pattern id="major-grid" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="12" height="12" fill="url(#minor-grid)" /><path d="M 12 0 L 0 0 0 12" fill="none" stroke="#b9c4bd" strokeWidth=".45" /></pattern>
+                <pattern id="stone-fill" width="8" height="8" patternUnits="userSpaceOnUse">
+                  <rect width="8" height="8" fill="#d7d1c3" />
+                  <circle cx="1.2" cy="2" r=".35" fill="#a9a091" /><circle cx="6.4" cy="5.7" r=".45" fill="#bbb2a3" /><path d="M1 7 3 6.2M5 .8 7 1.5" stroke="#c2baad" strokeWidth=".3" />
+                </pattern>
+                <pattern id="marble-fill" width="16" height="12" patternUnits="userSpaceOnUse">
+                  <rect width="16" height="12" fill="#f0efeb" /><path d="M-2 10C3 8 5 2 10 1s5-4 9-3M-3 12C2 10 5 5 9 4s5-3 9-3" fill="none" stroke="#b9c5c1" strokeWidth=".45" opacity=".8" />
+                </pattern>
+                <pattern id="concrete-fill" width="7" height="7" patternUnits="userSpaceOnUse">
+                  <rect width="7" height="7" fill="#c9cbc8" /><circle cx="1" cy="1.5" r=".25" fill="#999d99" /><circle cx="5.4" cy="3.5" r=".3" fill="#acafab" /><circle cx="2.8" cy="6" r=".2" fill="#8f948f" />
+                </pattern>
                 <pattern id="tile-pattern" x={patternX} y={patternY} width={actualTileW + grout} height={actualTileH + grout} patternUnits="userSpaceOnUse">
-                  <rect width={actualTileW} height={actualTileH} rx=".45" fill="#d4b477" fillOpacity=".28" stroke="#b78a38" strokeWidth=".45" />
+                  <rect width={actualTileW} height={actualTileH} rx=".45" fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
                 </pattern>
                 <clipPath id="room-clip"><polygon points={roomPath} /></clipPath>
               </defs>
@@ -331,8 +514,9 @@ export function LayoutPlanner() {
                 <line x1={bounds.minX} y1={startY} x2={bounds.maxX} y2={startY} />
                 <rect x={startX} y={startY} width={actualTileW} height={actualTileH} rx=".6" />
                 <g className="start-label" transform={`translate(${startX + actualTileW / 2} ${startY + actualTileH / 2})`}>
-                  <rect x="-10" y="-3.3" width="20" height="6.6" rx="2" />
-                  <text y="1.25">START HERE</text>
+                  <rect x="-18" y="-5.5" width="36" height="11" rx="2" />
+                  <text y="-1">START HERE</text>
+                  <text className="start-reference" y="3">L {formatLength(startLeftReference)} · T {formatLength(startTopReference)}</text>
                 </g>
               </g>}
               <g className="dimensions" pointerEvents="none">
@@ -341,14 +525,44 @@ export function LayoutPlanner() {
                 ); })}
               </g>
               {items.map((item) => { const isSelected = selectedId === item.id; return (
-                <g key={item.id} className={`plan-item ${item.type} ${isSelected ? "selected" : ""}`} onPointerDown={(event) => { if (tool !== "select") return; event.stopPropagation(); setSelectedId(item.id); }}>
+                <g key={item.id} className={`plan-item ${item.type} ${isSelected ? "selected" : ""}`} onPointerDown={(event) => beginItemDrag(event, item)}>
                   <line x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} strokeWidth={item.type === "wall" ? item.thickness : Math.max(2.25, item.thickness * .55)} />
                   {item.type === "opening" && <line className="opening-center" x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} />}
                   <text x={(item.start.x + item.end.x) / 2} y={(item.start.y + item.end.y) / 2 - item.thickness / 2 - 2}>{formatLength(distance(item.start, item.end))}</text>
                   {isSelected && <><circle cx={item.start.x} cy={item.start.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "start")} /><circle cx={item.end.x} cy={item.end.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "end")} /></>}
                 </g>
               ); })}
+              {selected?.type === "wall" && selectedWallMidpoint && selectedWallOrientation === "vertical" && <g className="wall-offset-guides">
+                <line x1={bounds.minX} y1={selectedWallMidpoint.y} x2={selectedWallMidpoint.x} y2={selectedWallMidpoint.y} />
+                <line x1={selectedWallMidpoint.x} y1={selectedWallMidpoint.y} x2={bounds.maxX} y2={selectedWallMidpoint.y} />
+                <foreignObject x={(bounds.minX + selectedWallMidpoint.x) / 2 - 10} y={selectedWallMidpoint.y - 4} width="20" height="8">
+                  <EditableDimension inches={selectedWallMidpoint.x - bounds.minX} label="Distance from left wall" onCommit={(value) => setWallOffset("left", value)} />
+                </foreignObject>
+                <foreignObject x={(selectedWallMidpoint.x + bounds.maxX) / 2 - 10} y={selectedWallMidpoint.y - 4} width="20" height="8">
+                  <EditableDimension inches={bounds.maxX - selectedWallMidpoint.x} label="Distance from right wall" onCommit={(value) => setWallOffset("right", value)} />
+                </foreignObject>
+              </g>}
+              {selected?.type === "wall" && selectedWallMidpoint && selectedWallOrientation === "horizontal" && <g className="wall-offset-guides">
+                <line x1={selectedWallMidpoint.x} y1={bounds.minY} x2={selectedWallMidpoint.x} y2={selectedWallMidpoint.y} />
+                <line x1={selectedWallMidpoint.x} y1={selectedWallMidpoint.y} x2={selectedWallMidpoint.x} y2={bounds.maxY} />
+                <foreignObject x={selectedWallMidpoint.x - 10} y={(bounds.minY + selectedWallMidpoint.y) / 2 - 4} width="20" height="8">
+                  <EditableDimension inches={selectedWallMidpoint.y - bounds.minY} label="Distance from top wall" onCommit={(value) => setWallOffset("top", value)} />
+                </foreignObject>
+                <foreignObject x={selectedWallMidpoint.x - 10} y={(selectedWallMidpoint.y + bounds.maxY) / 2 - 4} width="20" height="8">
+                  <EditableDimension inches={bounds.maxY - selectedWallMidpoint.y} label="Distance from bottom wall" onCommit={(value) => setWallOffset("bottom", value)} />
+                </foreignObject>
+              </g>}
               {drag?.kind === "draw" && <g className="draft-line" pointerEvents="none"><line x1={drag.start.x} y1={drag.start.y} x2={drag.current.x} y2={drag.current.y} strokeWidth={tool === "wall" ? wallThickness : 2.5} /><text x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + drag.current.y) / 2 - 4}>{formatLength(distance(drag.start, drag.current))}</text></g>}
+              {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.x - drag.start.x) < 1 && <g className="draft-offset-guides" pointerEvents="none">
+                <line x1={bounds.minX} y1={(drag.start.y + drag.current.y) / 2} x2={bounds.maxX} y2={(drag.start.y + drag.current.y) / 2} />
+                <text x={(bounds.minX + drag.start.x) / 2} y={(drag.start.y + drag.current.y) / 2 - 2}>{formatLength(drag.start.x - bounds.minX)} from left</text>
+                <text x={(drag.start.x + bounds.maxX) / 2} y={(drag.start.y + drag.current.y) / 2 - 2}>{formatLength(bounds.maxX - drag.start.x)} from right</text>
+              </g>}
+              {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.y - drag.start.y) < 1 && <g className="draft-offset-guides" pointerEvents="none">
+                <line x1={(drag.start.x + drag.current.x) / 2} y1={bounds.minY} x2={(drag.start.x + drag.current.x) / 2} y2={bounds.maxY} />
+                <text x={(drag.start.x + drag.current.x) / 2 + 3} y={(bounds.minY + drag.start.y) / 2}>{formatLength(drag.start.y - bounds.minY)} from top</text>
+                <text x={(drag.start.x + drag.current.x) / 2 + 3} y={(drag.start.y + bounds.maxY) / 2}>{formatLength(bounds.maxY - drag.start.y)} from bottom</text>
+              </g>}
               {draftRoom.length > 0 && <g className="draft-room" pointerEvents="none"><polyline points={draftPath} />{draftRoom.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="2" />)}</g>}
             </svg>
             <div className="scale-note">Each small square = 3 inches</div>
@@ -360,6 +574,7 @@ export function LayoutPlanner() {
             <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? "Wall" : "Opening"}</strong></div>
             <NumberField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} suffix="in" min={1} />
             <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => setItems((current) => current.map((item) => item.id === selected.id ? { ...item, thickness: value } : item))} suffix="in" min={1} step={.5} />
+            {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure to its centerline—click either value to enter an exact offset.</p>}
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
             <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); setSelectedId(null); }}>Delete {selected.type}</button>
           </section> : <section className="panel">
@@ -369,23 +584,44 @@ export function LayoutPlanner() {
           </section>}
 
           <section className="panel tile-panel">
-            <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>Tile layout</strong></span><label className="switch"><input type="checkbox" checked={showTile} onChange={(event) => setShowTile(event.target.checked)} /><span aria-hidden="true" /></label></div>
-            <div className="field-row"><NumberField label="Tile width" value={tileWidth} onChange={setTileWidth} suffix="in" min={1} step={.125} /><NumberField label="Tile length" value={tileHeight} onChange={setTileHeight} suffix="in" min={1} step={.125} /></div>
-            <NumberField label="Grout joint" value={grout} onChange={setGrout} suffix="in" min={.0625} step={.0625} />
+            <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>Tile layout</strong></span><label className="switch"><input aria-label="Show tile layout" type="checkbox" checked={showTile} onChange={(event) => setShowTile(event.target.checked)} /><span aria-hidden="true" /></label></div>
+            <div className="material-units" aria-label="Tile measurement unit">
+              {(["in", "mm", "cm"] as MaterialUnit[]).map((unit) => <button key={unit} className={materialUnit === unit ? "active" : ""} onClick={() => setMaterialUnit(unit)} aria-pressed={materialUnit === unit}>{unit}</button>)}
+            </div>
+            <div className="field-row">
+              <NumberField label="Tile width" value={displayUnit(tileWidth, materialUnit)} onChange={(value) => setTileWidth(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={materialMin} step={materialStep} />
+              <NumberField label="Tile length" value={displayUnit(tileHeight, materialUnit)} onChange={(value) => setTileHeight(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={materialMin} step={materialStep} />
+            </div>
+            <NumberField label="Grout joint" value={displayUnit(grout, materialUnit)} onChange={(value) => setGrout(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={groutMin} step={groutStep} />
+            <div className="appearance-field">
+              <span>Tile appearance</span>
+              <div className="appearance-options">
+                {([ ["transparent", "Clear"], ["porcelain", "Porcelain"], ["stone", "Stone"], ["marble", "Marble"], ["concrete", "Concrete"] ] as [TileAppearance, string][]).map(([value, label]) => (
+                  <button key={value} className={tileAppearance === value ? `active appearance-${value}` : `appearance-${value}`} onClick={() => setTileAppearance(value)} aria-pressed={tileAppearance === value}><span aria-hidden="true" />{label}</button>
+                ))}
+              </div>
+            </div>
             <div className="button-row"><button className="secondary" onClick={() => setRotation((value) => value === 0 ? 90 : 0)}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Balance cuts</button></div>
             <div className="nudge-control"><span>Fine-tune starting point</span><div><button onClick={() => setOrigin((point) => ({ ...point, x: point.x - .25 }))} aria-label="Move layout left">←</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y - .25 }))} aria-label="Move layout up">↑</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y + .25 }))} aria-label="Move layout down">↓</button><button onClick={() => setOrigin((point) => ({ ...point, x: point.x + .25 }))} aria-label="Move layout right">→</button></div></div>
           </section>
 
           <section className="panel results-panel">
             <div className="panel-heading inline-heading"><span><span className="eyebrow">Layout check</span><strong>{cutWarning ? "Review edge cuts" : "Cuts look balanced"}</strong></span><span className={`result-icon ${cutWarning ? "warning" : ""}`}>{cutWarning ? "!" : <Check size={17} />}</span></div>
-            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + 10%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest edge cut</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
+            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest edge cut</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
+            <div className="start-reference-card"><span>Start-line reference</span><strong>{formatLength(startLeftReference)} from left · {formatLength(startTopReference)} from top</strong></div>
             <p>{cutWarning ? "One edge may land below half a tile. Nudge the starting point or favor the most visible wall or doorway." : "The current starting point keeps the outside cuts close to equal."}</p>
+          </section>
+
+          <section className="panel install-panel">
+            <div className="panel-heading"><span className="eyebrow">Install setup</span><strong>{mortar.trowel}</strong></div>
+            <div className="install-metrics"><div><span>Mortar estimate</span><strong>{mortarBags} × 50 lb bags</strong></div><div><span>Waste allowance</span><NumberField label="Waste allowance" value={wastePercent} onChange={setWastePercent} suffix="%" min={0} step={1} /></div></div>
+            <p>Planning estimate based on about {mortar.coverage} ft² per bag. Confirm the mortar manufacturer&apos;s coverage and the trowel required for the tile back, substrate flatness, and required mortar coverage; back-buttering can increase usage.</p>
           </section>
         </aside>
       </section>
 
       <nav className="mobile-tools" aria-label="Drawing tools">
-        {([ ["select", MousePointer2, "Select"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Tile"] ] as const).map(([value, Icon, label]) => (
+        {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Tile"] ] as const).map(([value, Icon, label]) => (
           <button key={value} className={value !== "tile" && tool === value ? "active" : ""} onClick={() => { if (value === "tile") document.querySelector(".tile-panel")?.scrollIntoView({ behavior: "smooth" }); else setTool(value); }}><Icon size={19} /><span>{label}</span></button>
         ))}
       </nav>
