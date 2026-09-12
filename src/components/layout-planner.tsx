@@ -96,6 +96,7 @@ function NumberField({ label, value, onChange, suffix, min = 0, step = 1 }: {
 }
 
 export function LayoutPlanner() {
+  const [projectName, setProjectName] = useState("Untitled bathroom");
   const [room, setRoom] = useState<Point[]>(DEFAULT_ROOM);
   const [draftRoom, setDraftRoom] = useState<Point[]>([]);
   const [items, setItems] = useState<DrawItem[]>([
@@ -145,7 +146,8 @@ export function LayoutPlanner() {
     if (!stored) return;
     const timer = window.setTimeout(() => {
       try {
-        const parsed = JSON.parse(stored) as Snapshot & { tileWidth?: number; tileHeight?: number; grout?: number; origin?: Point; rotation?: 0 | 90 };
+      const parsed = JSON.parse(stored) as Snapshot & { projectName?: string; tileWidth?: number; tileHeight?: number; grout?: number; origin?: Point; rotation?: 0 | 90 };
+        if (parsed.projectName) setProjectName(parsed.projectName);
         if (parsed.room?.length >= 3) setRoom(parsed.room);
         if (parsed.items) setItems(parsed.items);
         if (parsed.tileWidth) setTileWidth(parsed.tileWidth);
@@ -160,11 +162,11 @@ export function LayoutPlanner() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      window.localStorage.setItem("layout-draft-v1", JSON.stringify({ room, items, tileWidth, tileHeight, grout, origin, rotation }));
+      window.localStorage.setItem("layout-draft-v1", JSON.stringify({ projectName, room, items, tileWidth, tileHeight, grout, origin, rotation }));
       setSaved(true);
     }, 450);
     return () => window.clearTimeout(timer);
-  }, [room, items, tileWidth, tileHeight, grout, origin, rotation]);
+  }, [projectName, room, items, tileWidth, tileHeight, grout, origin, rotation]);
 
   const pointerPoint = (event: React.PointerEvent<SVGSVGElement>): Point => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -218,6 +220,17 @@ export function LayoutPlanner() {
   const finishRoom = () => { if (draftRoom.length < 3) return; snapshot(); setRoom(draftRoom); setDraftRoom([]); setTool("select"); };
   const cancelRoom = () => { setDraftRoom([]); setTool("select"); };
   const autoBalance = () => setOrigin({ x: xCuts.offset, y: yCuts.offset });
+  const favorOpening = () => {
+    if (!selected || selected.type !== "opening") return;
+    const horizontal = Math.abs(selected.end.x - selected.start.x) >= Math.abs(selected.end.y - selected.start.y);
+    const midpoint = {
+      x: (selected.start.x + selected.end.x) / 2,
+      y: (selected.start.y + selected.end.y) / 2,
+    };
+    setOrigin((current) => horizontal
+      ? { ...current, x: midpoint.x - bounds.minX - actualTileW / 2 }
+      : { ...current, y: midpoint.y - bounds.minY - actualTileH / 2 });
+  };
 
   const updateSelectedLength = (nextLength: number) => {
     if (!selected || nextLength <= 0) return;
@@ -252,6 +265,10 @@ export function LayoutPlanner() {
   const draftPath = draftRoom.map((point) => `${point.x},${point.y}`).join(" ");
   const patternX = bounds.minX + origin.x;
   const patternY = bounds.minY + origin.y;
+  const pitchX = actualTileW + grout;
+  const pitchY = actualTileH + grout;
+  const startX = patternX + Math.floor(((bounds.minX + bounds.maxX) / 2 - patternX) / pitchX) * pitchX;
+  const startY = patternY + Math.floor(((bounds.minY + bounds.maxY) / 2 - patternY) / pitchY) * pitchY;
 
   return (
     <main className="app-shell">
@@ -260,7 +277,10 @@ export function LayoutPlanner() {
           <span className="brand-mark"><PencilRuler size={22} strokeWidth={2.25} /></span>
           <span className="brand-name">Layout</span><span className="brand-family">by Buildr</span>
         </div>
-        <div className="project-name"><span>Untitled bathroom</span><ChevronDown size={15} /></div>
+        <label className="project-name">
+          <input aria-label="Project name" value={projectName} onChange={(event) => setProjectName(event.target.value)} />
+          <ChevronDown size={15} aria-hidden="true" />
+        </label>
         <div className="header-actions">
           <span className={`save-state ${saved ? "is-saved" : ""}`}>{saved ? <Check size={14} /> : <Save size={14} />}{saved ? "Saved" : "Saving"}</span>
           <button className="icon-button" onClick={undo} disabled={!history.length} aria-label="Undo"><Undo2 size={18} /></button>
@@ -306,6 +326,15 @@ export function LayoutPlanner() {
               <rect width="100%" height="100%" fill="url(#major-grid)" />
               <polygon points={roomPath} fill="#fff" stroke="#173f32" strokeWidth="2.25" strokeLinejoin="round" />
               {showTile && <rect x={bounds.minX - actualTileW} y={bounds.minY - actualTileH} width={roomWidth + actualTileW * 2} height={roomHeight + actualTileH * 2} fill="url(#tile-pattern)" clipPath="url(#room-clip)" />}
+              {showTile && <g className="start-guide" clipPath="url(#room-clip)" pointerEvents="none">
+                <line x1={startX} y1={bounds.minY} x2={startX} y2={bounds.maxY} />
+                <line x1={bounds.minX} y1={startY} x2={bounds.maxX} y2={startY} />
+                <rect x={startX} y={startY} width={actualTileW} height={actualTileH} rx=".6" />
+                <g className="start-label" transform={`translate(${startX + actualTileW / 2} ${startY + actualTileH / 2})`}>
+                  <rect x="-10" y="-3.3" width="20" height="6.6" rx="2" />
+                  <text y="1.25">START HERE</text>
+                </g>
+              </g>}
               <g className="dimensions" pointerEvents="none">
                 {room.map((point, index) => { const next = room[(index + 1) % room.length]; const midpoint = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }; return (
                   <g key={`${point.x}-${point.y}-${index}`}><rect x={midpoint.x - 9} y={midpoint.y - 3.4} width="18" height="6.8" rx="2" /><text x={midpoint.x} y={midpoint.y + 1.45}>{formatLength(distance(point, next))}</text></g>
@@ -331,6 +360,7 @@ export function LayoutPlanner() {
             <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? "Wall" : "Opening"}</strong></div>
             <NumberField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} suffix="in" min={1} />
             <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => setItems((current) => current.map((item) => item.id === selected.id ? { ...item, thickness: value } : item))} suffix="in" min={1} step={.5} />
+            {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
             <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); setSelectedId(null); }}>Delete {selected.type}</button>
           </section> : <section className="panel">
             <div className="panel-heading"><span className="eyebrow">Room</span><strong>{isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom shape"}</strong></div>
