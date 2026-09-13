@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  BrickWall, Check, ChevronDown, DoorOpen, Grid3X3, Hand, MousePointer2, PencilRuler,
+  BrickWall, Check, ChevronDown, DoorOpen, Grid3X3, Hand, MousePointer2, Move, PencilRuler,
   Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Undo2,
   ZoomIn, ZoomOut,
 } from "lucide-react";
@@ -9,14 +9,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Point = { x: number; y: number };
 type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
-type Tool = "select" | "pan" | "room" | "wall" | "opening";
+type Tool = "select" | "pan" | "floor" | "room" | "wall" | "opening";
 type MaterialUnit = "in" | "mm" | "cm";
 type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
+type CutObstacle = { coordinate: number; side: "before" | "after" };
 type DragState =
   | { kind: "draw"; start: Point; current: Point }
   | { kind: "endpoint"; id: string; endpoint: "start" | "end" }
   | { kind: "item"; id: string; anchor: Point; originalStart: Point; originalEnd: Point }
   | { kind: "pan"; clientX: number; clientY: number; origin: Point }
+  | { kind: "tile"; anchor: Point; originalOrigin: Point }
   | null;
 type Snapshot = { room: Point[]; items: DrawItem[] };
 
@@ -72,23 +74,26 @@ const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, i
   return point.x === next.x || point.y === next.y;
 });
 
-function balancedOffset(span: number, tile: number, grout: number) {
+function cutAtBoundary(coordinate: number, tile: number, grout: number, rawOffset: number, side: CutObstacle["side"]) {
   const pitch = tile + grout;
-  let best = { offset: 0, score: -1, left: 0, right: 0 };
+  const phase = ((coordinate - rawOffset) % pitch + pitch) % pitch;
+  if (phase < 0.001 || phase >= tile - 0.001) return tile;
+  return side === "before" ? phase : tile - phase;
+}
+
+function assessAxis(span: number, tile: number, grout: number, rawOffset: number, obstacles: CutObstacle[]) {
+  const edges = edgeCuts(span, tile, grout, rawOffset);
+  const obstacleCuts = obstacles.map((obstacle) => cutAtBoundary(obstacle.coordinate, tile, grout, rawOffset, obstacle.side));
+  return { ...edges, minimum: Math.min(edges.left, edges.right, ...obstacleCuts) };
+}
+
+function balancedOffset(span: number, tile: number, grout: number, obstacles: CutObstacle[]) {
+  const pitch = tile + grout;
+  let best = { offset: 0, score: -Infinity, left: 0, right: 0, minimum: 0 };
   for (let offset = -pitch; offset <= 0; offset += 0.125) {
-    const intersections: { start: number; end: number }[] = [];
-    for (let start = offset; start < span; start += pitch) {
-      const end = start + tile;
-      const visibleStart = Math.max(0, start);
-      const visibleEnd = Math.min(span, end);
-      if (visibleEnd > visibleStart) intersections.push({ start: visibleStart, end: visibleEnd });
-    }
-    if (!intersections.length) continue;
-    const left = intersections[0].end - intersections[0].start;
-    const last = intersections[intersections.length - 1];
-    const right = last.end - last.start;
-    const score = (Math.min(left, right) / tile) * 10 + (1 - Math.abs(left - right) / tile);
-    if (score > best.score) best = { offset, score, left, right };
+    const assessment = assessAxis(span, tile, grout, offset, obstacles);
+    const score = assessment.minimum * 100 - Math.abs(assessment.left - assessment.right);
+    if (score > best.score) best = { offset, score, ...assessment };
   }
   return best;
 }
@@ -165,6 +170,7 @@ export function LayoutPlanner() {
   ]);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [dimensionedWallId, setDimensionedWallId] = useState<string | null>("sample-wall");
   const [drag, setDrag] = useState<DragState>(null);
   const [tileWidth, setTileWidth] = useState(12);
   const [tileHeight, setTileHeight] = useState(24);
@@ -194,12 +200,52 @@ export function LayoutPlanner() {
   const tileCount = tileSqFt ? Math.ceil((areaSqFt / tileSqFt) * wasteMultiplier) : 0;
   const mortar = mortarRecommendation(tileWidth, tileHeight);
   const mortarBags = Math.max(1, Math.ceil((areaSqFt * wasteMultiplier) / mortar.coverage));
-  const xCuts = useMemo(() => balancedOffset(roomWidth, actualTileW, grout), [roomWidth, actualTileW, grout]);
-  const yCuts = useMemo(() => balancedOffset(roomHeight, actualTileH, grout), [roomHeight, actualTileH, grout]);
-  const currentXCuts = useMemo(() => edgeCuts(roomWidth, actualTileW, grout, origin.x), [roomWidth, actualTileW, grout, origin.x]);
-  const currentYCuts = useMemo(() => edgeCuts(roomHeight, actualTileH, grout, origin.y), [roomHeight, actualTileH, grout, origin.y]);
+  const { xObstacles, yObstacles } = useMemo(() => {
+    const nextX: CutObstacle[] = [];
+    const nextY: CutObstacle[] = [];
+    const addBoth = (target: CutObstacle[], coordinate: number) => {
+      target.push({ coordinate, side: "before" }, { coordinate, side: "after" });
+    };
+    items.forEach((item) => {
+      const horizontal = Math.abs(item.end.x - item.start.x) >= Math.abs(item.end.y - item.start.y);
+      if (item.type === "wall") {
+        if (horizontal) {
+          const center = (item.start.y + item.end.y) / 2 - bounds.minY;
+          nextY.push(
+            { coordinate: center - item.thickness / 2, side: "before" },
+            { coordinate: center + item.thickness / 2, side: "after" },
+          );
+          addBoth(nextX, item.start.x - bounds.minX);
+          addBoth(nextX, item.end.x - bounds.minX);
+        } else {
+          const center = (item.start.x + item.end.x) / 2 - bounds.minX;
+          nextX.push(
+            { coordinate: center - item.thickness / 2, side: "before" },
+            { coordinate: center + item.thickness / 2, side: "after" },
+          );
+          addBoth(nextY, item.start.y - bounds.minY);
+          addBoth(nextY, item.end.y - bounds.minY);
+        }
+      } else if (horizontal) {
+        addBoth(nextX, item.start.x - bounds.minX);
+        addBoth(nextX, item.end.x - bounds.minX);
+      } else {
+        addBoth(nextY, item.start.y - bounds.minY);
+        addBoth(nextY, item.end.y - bounds.minY);
+      }
+    });
+    return {
+      xObstacles: nextX.filter(({ coordinate }) => coordinate > 0 && coordinate < roomWidth),
+      yObstacles: nextY.filter(({ coordinate }) => coordinate > 0 && coordinate < roomHeight),
+    };
+  }, [items, bounds.minX, bounds.minY, roomWidth, roomHeight]);
+  const xCuts = useMemo(() => balancedOffset(roomWidth, actualTileW, grout, xObstacles), [roomWidth, actualTileW, grout, xObstacles]);
+  const yCuts = useMemo(() => balancedOffset(roomHeight, actualTileH, grout, yObstacles), [roomHeight, actualTileH, grout, yObstacles]);
+  const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles), [roomWidth, actualTileW, grout, origin.x, xObstacles]);
+  const currentYCuts = useMemo(() => assessAxis(roomHeight, actualTileH, grout, origin.y, yObstacles), [roomHeight, actualTileH, grout, origin.y, yObstacles]);
   const selected = items.find((item) => item.id === selectedId) ?? null;
-  const minimumCut = Math.min(currentXCuts.left, currentXCuts.right, currentYCuts.left, currentYCuts.right);
+  const dimensionedWall = items.find((item) => item.id === dimensionedWallId && item.type === "wall") ?? null;
+  const minimumCut = Math.min(currentXCuts.minimum, currentYCuts.minimum);
   const cutWarning = minimumCut < Math.min(actualTileW, actualTileH) / 2;
 
   const snapshot = useCallback(() => {
@@ -268,6 +314,11 @@ export function LayoutPlanner() {
       setDrag({ kind: "pan", clientX: event.clientX, clientY: event.clientY, origin: pan });
       return;
     }
+    if (tool === "floor") {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setDrag({ kind: "tile", anchor: point, originalOrigin: origin });
+      return;
+    }
     if (tool === "room") { setDraftRoom((current) => [...current, point]); return; }
     if (tool === "wall" || tool === "opening") {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -289,6 +340,13 @@ export function LayoutPlanner() {
       return;
     }
     const point = pointerPoint(event);
+    if (drag.kind === "tile") {
+      setOrigin({
+        x: drag.originalOrigin.x + point.x - drag.anchor.x,
+        y: drag.originalOrigin.y + point.y - drag.anchor.y,
+      });
+      return;
+    }
     if (drag.kind === "draw") {
       const dx = Math.abs(point.x - drag.start.x);
       const dy = Math.abs(point.y - drag.start.y);
@@ -325,6 +383,7 @@ export function LayoutPlanner() {
       const next: DrawItem = { id: uid(), type: tool === "opening" ? "opening" : "wall", start: drag.start, end: drag.current, thickness: wallThickness };
       setItems((current) => [...current, next]);
       setSelectedId(next.id);
+      if (next.type === "wall") setDimensionedWallId(next.id);
       setTool("select");
     }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
@@ -332,13 +391,16 @@ export function LayoutPlanner() {
   };
 
   const beginEndpointDrag = (event: React.PointerEvent<SVGCircleElement>, id: string, endpoint: "start" | "end") => {
-    event.stopPropagation(); snapshot(); svgRef.current?.setPointerCapture(event.pointerId); setDrag({ kind: "endpoint", id, endpoint });
+    event.stopPropagation(); snapshot();
+    if (items.find((item) => item.id === id)?.type === "wall") setDimensionedWallId(id);
+    svgRef.current?.setPointerCapture(event.pointerId); setDrag({ kind: "endpoint", id, endpoint });
   };
   const beginItemDrag = (event: React.PointerEvent<SVGGElement>, item: DrawItem) => {
     if (tool !== "select") return;
     event.stopPropagation();
     snapshot();
     setSelectedId(item.id);
+    if (item.type === "wall") setDimensionedWallId(item.id);
     svgRef.current?.setPointerCapture(event.pointerId);
     setDrag({ kind: "item", id: item.id, anchor: clientPoint(event.clientX, event.clientY), originalStart: item.start, originalEnd: item.end });
   };
@@ -395,33 +457,43 @@ export function LayoutPlanner() {
   const startX = patternX + Math.floor(((bounds.minX + bounds.maxX) / 2 - patternX) / pitchX) * pitchX;
   const startY = patternY + Math.floor(((bounds.minY + bounds.maxY) / 2 - patternY) / pitchY) * pitchY;
   const startLeftReference = Math.max(0, startX - bounds.minX);
+  const startRightReference = Math.max(0, bounds.maxX - startX);
   const startTopReference = Math.max(0, startY - bounds.minY);
-  const selectedWallOrientation = selected?.type === "wall"
-    ? Math.abs(selected.end.x - selected.start.x) < 1
+  const startBottomReference = Math.max(0, bounds.maxY - startY);
+  const guideWallOrientation = dimensionedWall
+    ? Math.abs(dimensionedWall.end.x - dimensionedWall.start.x) < 1
       ? "vertical"
-      : Math.abs(selected.end.y - selected.start.y) < 1
+      : Math.abs(dimensionedWall.end.y - dimensionedWall.start.y) < 1
         ? "horizontal"
         : null
     : null;
-  const selectedWallMidpoint = selected ? {
-    x: (selected.start.x + selected.end.x) / 2,
-    y: (selected.start.y + selected.end.y) / 2,
+  const guideWallMidpoint = dimensionedWall ? {
+    x: (dimensionedWall.start.x + dimensionedWall.end.x) / 2,
+    y: (dimensionedWall.start.y + dimensionedWall.end.y) / 2,
   } : null;
+  const guideHalfThickness = dimensionedWall ? dimensionedWall.thickness / 2 : 0;
+  const guideLeftFace = guideWallMidpoint ? guideWallMidpoint.x - guideHalfThickness : 0;
+  const guideRightFace = guideWallMidpoint ? guideWallMidpoint.x + guideHalfThickness : 0;
+  const guideTopFace = guideWallMidpoint ? guideWallMidpoint.y - guideHalfThickness : 0;
+  const guideBottomFace = guideWallMidpoint ? guideWallMidpoint.y + guideHalfThickness : 0;
   const setWallOffset = (side: "left" | "right" | "top" | "bottom", value: number) => {
-    if (!selected || selected.type !== "wall" || !selectedWallMidpoint) return;
+    if (!dimensionedWall || !guideWallMidpoint) return;
     snapshot();
+    const halfThickness = dimensionedWall.thickness / 2;
     if (side === "left" || side === "right") {
-      const target = side === "left" ? bounds.minX + value : bounds.maxX - value;
-      const delta = target - selectedWallMidpoint.x;
-      setItems((current) => current.map((item) => item.id === selected.id ? {
+      const rawTarget = side === "left" ? bounds.minX + value + halfThickness : bounds.maxX - value - halfThickness;
+      const target = clamp(rawTarget, bounds.minX + halfThickness, bounds.maxX - halfThickness);
+      const delta = target - guideWallMidpoint.x;
+      setItems((current) => current.map((item) => item.id === dimensionedWall.id ? {
         ...item,
         start: { ...item.start, x: item.start.x + delta },
         end: { ...item.end, x: item.end.x + delta },
       } : item));
     } else {
-      const target = side === "top" ? bounds.minY + value : bounds.maxY - value;
-      const delta = target - selectedWallMidpoint.y;
-      setItems((current) => current.map((item) => item.id === selected.id ? {
+      const rawTarget = side === "top" ? bounds.minY + value + halfThickness : bounds.maxY - value - halfThickness;
+      const target = clamp(rawTarget, bounds.minY + halfThickness, bounds.maxY - halfThickness);
+      const delta = target - guideWallMidpoint.y;
+      setItems((current) => current.map((item) => item.id === dimensionedWall.id ? {
         ...item,
         start: { ...item.start, y: item.start.y + delta },
         end: { ...item.end, y: item.end.y + delta },
@@ -461,7 +533,7 @@ export function LayoutPlanner() {
 
       <section className="workspace">
         <nav className="toolrail" aria-label="Drawing tools">
-          {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"] ] as const).map(([value, Icon, label]) => (
+          {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"] ] as const).map(([value, Icon, label]) => (
             <button key={value} className={tool === value ? "active" : ""} onClick={() => { setTool(value); setDraftRoom([]); setSelectedId(null); }} aria-pressed={tool === value}>
               <Icon size={21} /><span>{label}</span>
             </button>
@@ -471,8 +543,8 @@ export function LayoutPlanner() {
         <section className="canvas-column">
           <div className="canvas-toolbar">
             <div className="mode-copy">
-              <strong>{{ select: "Select and adjust", pan: "Move around the plan", wall: "Draw a straight wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
-              <span>{{ select: "Drag a selected wall to move it, or drag either end to resize it.", pan: "Drag the work area after zooming in.", wall: "Walls snap straight. Hold Alt only when you need an angle.", opening: "Openings snap straight along the wall.", room: "Tap each corner, then finish the room." }[tool]}</span>
+              <strong>{{ select: "Select and adjust", pan: "Move around the plan", floor: "Move the tile field", wall: "Draw a straight wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
+              <span>{{ select: "Drag a selected wall to move it, or drag either end to resize it.", pan: "Drag the work area after zooming in.", floor: "Grab the floor and drag the entire tile layout in any direction.", wall: "Walls snap straight. Hold Alt only when you need an angle.", opening: "Openings snap straight along the wall.", room: "Tap each corner, then finish the room." }[tool]}</span>
             </div>
             {tool === "room" && <div className="draft-actions"><button className="text-button" onClick={cancelRoom}>Cancel</button><button className="primary small" disabled={draftRoom.length < 3} onClick={finishRoom}>Finish room</button></div>}
             <div className="zoom-controls">
@@ -509,15 +581,27 @@ export function LayoutPlanner() {
               <rect width="100%" height="100%" fill="url(#major-grid)" />
               <polygon points={roomPath} fill="#fff" stroke="#173f32" strokeWidth="2.25" strokeLinejoin="round" />
               {showTile && <rect x={bounds.minX - actualTileW} y={bounds.minY - actualTileH} width={roomWidth + actualTileW * 2} height={roomHeight + actualTileH * 2} fill="url(#tile-pattern)" clipPath="url(#room-clip)" />}
-              {showTile && <g className="start-guide" clipPath="url(#room-clip)" pointerEvents="none">
-                <line x1={startX} y1={bounds.minY} x2={startX} y2={bounds.maxY} />
-                <line x1={bounds.minX} y1={startY} x2={bounds.maxX} y2={startY} />
-                <rect x={startX} y={startY} width={actualTileW} height={actualTileH} rx=".6" />
-                <g className="start-label" transform={`translate(${startX + actualTileW / 2} ${startY + actualTileH / 2})`}>
-                  <rect x="-18" y="-5.5" width="36" height="11" rx="2" />
-                  <text y="-1">START HERE</text>
-                  <text className="start-reference" y="3">L {formatLength(startLeftReference)} · T {formatLength(startTopReference)}</text>
+              {showTile && <g className="chalk-guide" clipPath="url(#room-clip)" pointerEvents="none">
+                <line className="chalk-axis" x1={startX} y1={bounds.minY} x2={startX} y2={bounds.maxY} />
+                <line className="chalk-axis" x1={bounds.minX} y1={startY} x2={bounds.maxX} y2={startY} />
+                <circle cx={startX} cy={startY} r="1.8" />
+                <g className="chalk-measure">
+                  <rect x={(bounds.minX + startX) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={(bounds.minX + startX) / 2} y={startY + 1.25}>{formatLength(startLeftReference)} from left</text>
                 </g>
+                <g className="chalk-measure">
+                  <rect x={(startX + bounds.maxX) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={(startX + bounds.maxX) / 2} y={startY + 1.25}>{formatLength(startRightReference)} from right</text>
+                </g>
+                <g className="chalk-measure">
+                  <rect x={startX - 15} y={(bounds.minY + startY) / 2 - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={startX} y={(bounds.minY + startY) / 2 + 1.25}>{formatLength(startTopReference)} from top</text>
+                </g>
+                <g className="chalk-measure">
+                  <rect x={startX - 15} y={(startY + bounds.maxY) / 2 - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={startX} y={(startY + bounds.maxY) / 2 + 1.25}>{formatLength(startBottomReference)} from bottom</text>
+                </g>
+                <g className="chalk-label" transform={`translate(${startX + 12} ${startY - 7})`}><rect x="-10" y="-3" width="20" height="6" rx="2" /><text y="1">CHALK CROSSING</text></g>
               </g>}
               <g className="dimensions" pointerEvents="none">
                 {room.map((point, index) => { const next = room[(index + 1) % room.length]; const midpoint = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }; return (
@@ -532,36 +616,38 @@ export function LayoutPlanner() {
                   {isSelected && <><circle cx={item.start.x} cy={item.start.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "start")} /><circle cx={item.end.x} cy={item.end.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "end")} /></>}
                 </g>
               ); })}
-              {selected?.type === "wall" && selectedWallMidpoint && selectedWallOrientation === "vertical" && <g className="wall-offset-guides">
-                <line x1={bounds.minX} y1={selectedWallMidpoint.y} x2={selectedWallMidpoint.x} y2={selectedWallMidpoint.y} />
-                <line x1={selectedWallMidpoint.x} y1={selectedWallMidpoint.y} x2={bounds.maxX} y2={selectedWallMidpoint.y} />
-                <foreignObject x={(bounds.minX + selectedWallMidpoint.x) / 2 - 10} y={selectedWallMidpoint.y - 4} width="20" height="8">
-                  <EditableDimension inches={selectedWallMidpoint.x - bounds.minX} label="Distance from left wall" onCommit={(value) => setWallOffset("left", value)} />
+              {dimensionedWall && guideWallMidpoint && guideWallOrientation === "vertical" && <g className="wall-offset-guides">
+                <line x1={bounds.minX} y1={guideWallMidpoint.y} x2={guideLeftFace} y2={guideWallMidpoint.y} />
+                <line x1={guideRightFace} y1={guideWallMidpoint.y} x2={bounds.maxX} y2={guideWallMidpoint.y} />
+                <foreignObject x={(bounds.minX + guideLeftFace) / 2 - 13} y={guideWallMidpoint.y - 4} width="26" height="8">
+                  <EditableDimension inches={guideLeftFace - bounds.minX} label="Distance from left border to wall face" onCommit={(value) => setWallOffset("left", value)} />
                 </foreignObject>
-                <foreignObject x={(selectedWallMidpoint.x + bounds.maxX) / 2 - 10} y={selectedWallMidpoint.y - 4} width="20" height="8">
-                  <EditableDimension inches={bounds.maxX - selectedWallMidpoint.x} label="Distance from right wall" onCommit={(value) => setWallOffset("right", value)} />
+                <foreignObject x={(guideRightFace + bounds.maxX) / 2 - 13} y={guideWallMidpoint.y - 4} width="26" height="8">
+                  <EditableDimension inches={bounds.maxX - guideRightFace} label="Distance from right border to wall face" onCommit={(value) => setWallOffset("right", value)} />
                 </foreignObject>
               </g>}
-              {selected?.type === "wall" && selectedWallMidpoint && selectedWallOrientation === "horizontal" && <g className="wall-offset-guides">
-                <line x1={selectedWallMidpoint.x} y1={bounds.minY} x2={selectedWallMidpoint.x} y2={selectedWallMidpoint.y} />
-                <line x1={selectedWallMidpoint.x} y1={selectedWallMidpoint.y} x2={selectedWallMidpoint.x} y2={bounds.maxY} />
-                <foreignObject x={selectedWallMidpoint.x - 10} y={(bounds.minY + selectedWallMidpoint.y) / 2 - 4} width="20" height="8">
-                  <EditableDimension inches={selectedWallMidpoint.y - bounds.minY} label="Distance from top wall" onCommit={(value) => setWallOffset("top", value)} />
+              {dimensionedWall && guideWallMidpoint && guideWallOrientation === "horizontal" && <g className="wall-offset-guides">
+                <line x1={guideWallMidpoint.x} y1={bounds.minY} x2={guideWallMidpoint.x} y2={guideTopFace} />
+                <line x1={guideWallMidpoint.x} y1={guideBottomFace} x2={guideWallMidpoint.x} y2={bounds.maxY} />
+                <foreignObject x={guideWallMidpoint.x - 13} y={(bounds.minY + guideTopFace) / 2 - 4} width="26" height="8">
+                  <EditableDimension inches={guideTopFace - bounds.minY} label="Distance from top border to wall face" onCommit={(value) => setWallOffset("top", value)} />
                 </foreignObject>
-                <foreignObject x={selectedWallMidpoint.x - 10} y={(selectedWallMidpoint.y + bounds.maxY) / 2 - 4} width="20" height="8">
-                  <EditableDimension inches={bounds.maxY - selectedWallMidpoint.y} label="Distance from bottom wall" onCommit={(value) => setWallOffset("bottom", value)} />
+                <foreignObject x={guideWallMidpoint.x - 13} y={(guideBottomFace + bounds.maxY) / 2 - 4} width="26" height="8">
+                  <EditableDimension inches={bounds.maxY - guideBottomFace} label="Distance from bottom border to wall face" onCommit={(value) => setWallOffset("bottom", value)} />
                 </foreignObject>
               </g>}
               {drag?.kind === "draw" && <g className="draft-line" pointerEvents="none"><line x1={drag.start.x} y1={drag.start.y} x2={drag.current.x} y2={drag.current.y} strokeWidth={tool === "wall" ? wallThickness : 2.5} /><text x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + drag.current.y) / 2 - 4}>{formatLength(distance(drag.start, drag.current))}</text></g>}
               {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.x - drag.start.x) < 1 && <g className="draft-offset-guides" pointerEvents="none">
-                <line x1={bounds.minX} y1={(drag.start.y + drag.current.y) / 2} x2={bounds.maxX} y2={(drag.start.y + drag.current.y) / 2} />
-                <text x={(bounds.minX + drag.start.x) / 2} y={(drag.start.y + drag.current.y) / 2 - 2}>{formatLength(drag.start.x - bounds.minX)} from left</text>
-                <text x={(drag.start.x + bounds.maxX) / 2} y={(drag.start.y + drag.current.y) / 2 - 2}>{formatLength(bounds.maxX - drag.start.x)} from right</text>
+                <line x1={bounds.minX} y1={(drag.start.y + drag.current.y) / 2} x2={drag.start.x - wallThickness / 2} y2={(drag.start.y + drag.current.y) / 2} />
+                <line x1={drag.start.x + wallThickness / 2} y1={(drag.start.y + drag.current.y) / 2} x2={bounds.maxX} y2={(drag.start.y + drag.current.y) / 2} />
+                <text x={(bounds.minX + drag.start.x - wallThickness / 2) / 2} y={(drag.start.y + drag.current.y) / 2 - 2}>{formatLength(drag.start.x - wallThickness / 2 - bounds.minX)} from left</text>
+                <text x={(drag.start.x + wallThickness / 2 + bounds.maxX) / 2} y={(drag.start.y + drag.current.y) / 2 - 2}>{formatLength(bounds.maxX - drag.start.x - wallThickness / 2)} from right</text>
               </g>}
               {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.y - drag.start.y) < 1 && <g className="draft-offset-guides" pointerEvents="none">
-                <line x1={(drag.start.x + drag.current.x) / 2} y1={bounds.minY} x2={(drag.start.x + drag.current.x) / 2} y2={bounds.maxY} />
-                <text x={(drag.start.x + drag.current.x) / 2 + 3} y={(bounds.minY + drag.start.y) / 2}>{formatLength(drag.start.y - bounds.minY)} from top</text>
-                <text x={(drag.start.x + drag.current.x) / 2 + 3} y={(drag.start.y + bounds.maxY) / 2}>{formatLength(bounds.maxY - drag.start.y)} from bottom</text>
+                <line x1={(drag.start.x + drag.current.x) / 2} y1={bounds.minY} x2={(drag.start.x + drag.current.x) / 2} y2={drag.start.y - wallThickness / 2} />
+                <line x1={(drag.start.x + drag.current.x) / 2} y1={drag.start.y + wallThickness / 2} x2={(drag.start.x + drag.current.x) / 2} y2={bounds.maxY} />
+                <text x={(drag.start.x + drag.current.x) / 2 + 3} y={(bounds.minY + drag.start.y - wallThickness / 2) / 2}>{formatLength(drag.start.y - wallThickness / 2 - bounds.minY)} from top</text>
+                <text x={(drag.start.x + drag.current.x) / 2 + 3} y={(drag.start.y + wallThickness / 2 + bounds.maxY) / 2}>{formatLength(bounds.maxY - drag.start.y - wallThickness / 2)} from bottom</text>
               </g>}
               {draftRoom.length > 0 && <g className="draft-room" pointerEvents="none"><polyline points={draftPath} />{draftRoom.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="2" />)}</g>}
             </svg>
@@ -574,9 +660,9 @@ export function LayoutPlanner() {
             <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? "Wall" : "Opening"}</strong></div>
             <NumberField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} suffix="in" min={1} />
             <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => setItems((current) => current.map((item) => item.id === selected.id ? { ...item, thickness: value } : item))} suffix="in" min={1} step={.5} />
-            {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure to its centerline—click either value to enter an exact offset.</p>}
+            {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure from each border to the nearest wall face—click either value to enter an exact offset. The guide stays pinned after deselection.</p>}
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
-            <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); setSelectedId(null); }}>Delete {selected.type}</button>
+            <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); if (dimensionedWallId === selected.id) setDimensionedWallId(null); setSelectedId(null); }}>Delete {selected.type}</button>
           </section> : <section className="panel">
             <div className="panel-heading"><span className="eyebrow">Room</span><strong>{isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom shape"}</strong></div>
             {isRectangle(room) && <div className="field-row"><NumberField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} suffix="in" min={24} /><NumberField label="Length" value={roomHeight} onChange={(value) => resizeRectangle("height", value)} suffix="in" min={24} /></div>}
@@ -601,15 +687,16 @@ export function LayoutPlanner() {
                 ))}
               </div>
             </div>
-            <div className="button-row"><button className="secondary" onClick={() => setRotation((value) => value === 0 ? 90 : 0)}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Balance cuts</button></div>
-            <div className="nudge-control"><span>Fine-tune starting point</span><div><button onClick={() => setOrigin((point) => ({ ...point, x: point.x - .25 }))} aria-label="Move layout left">←</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y - .25 }))} aria-label="Move layout up">↑</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y + .25 }))} aria-label="Move layout down">↓</button><button onClick={() => setOrigin((point) => ({ ...point, x: point.x + .25 }))} aria-label="Move layout right">→</button></div></div>
+            <div className="button-row"><button className="secondary" onClick={() => setRotation((value) => value === 0 ? 90 : 0)}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Optimize cuts</button></div>
+            <button className={`grab-floor-button ${tool === "floor" ? "active" : ""}`} onClick={() => { setShowTile(true); setTool("floor"); setSelectedId(null); }}><Move size={16} /> {tool === "floor" ? "Drag the floor on the plan" : "Grab and move floor"}</button>
+            <div className="nudge-control"><span>Precision adjustment · 1/4″</span><div><button onClick={() => setOrigin((point) => ({ ...point, x: point.x - .25 }))} aria-label="Move layout left">←</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y - .25 }))} aria-label="Move layout up">↑</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y + .25 }))} aria-label="Move layout down">↓</button><button onClick={() => setOrigin((point) => ({ ...point, x: point.x + .25 }))} aria-label="Move layout right">→</button></div></div>
           </section>
 
           <section className="panel results-panel">
             <div className="panel-heading inline-heading"><span><span className="eyebrow">Layout check</span><strong>{cutWarning ? "Review edge cuts" : "Cuts look balanced"}</strong></span><span className={`result-icon ${cutWarning ? "warning" : ""}`}>{cutWarning ? "!" : <Check size={17} />}</span></div>
-            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest edge cut</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
-            <div className="start-reference-card"><span>Start-line reference</span><strong>{formatLength(startLeftReference)} from left · {formatLength(startTopReference)} from top</strong></div>
-            <p>{cutWarning ? "One edge may land below half a tile. Nudge the starting point or favor the most visible wall or doorway." : "The current starting point keeps the outside cuts close to equal."}</p>
+            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest planned cut</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
+            <div className="start-reference-card"><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left · {formatLength(startRightReference)} from right</strong><span>Horizontal chalk line</span><strong>{formatLength(startTopReference)} from top · {formatLength(startBottomReference)} from bottom</strong></div>
+            <p>{cutWarning ? "A room edge, wall face, wall end, or opening may create a cut below half a tile. Use Optimize cuts, drag the floor, or nudge it precisely." : "The current tile position avoids small cuts across the room edges, walls, and openings being checked."}</p>
           </section>
 
           <section className="panel install-panel">
@@ -621,7 +708,7 @@ export function LayoutPlanner() {
       </section>
 
       <nav className="mobile-tools" aria-label="Drawing tools">
-        {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Tile"] ] as const).map(([value, Icon, label]) => (
+        {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Tile"] ] as const).map(([value, Icon, label]) => (
           <button key={value} className={value !== "tile" && tool === value ? "active" : ""} onClick={() => { if (value === "tile") document.querySelector(".tile-panel")?.scrollIntoView({ behavior: "smooth" }); else setTool(value); }}><Icon size={19} /><span>{label}</span></button>
         ))}
       </nav>
