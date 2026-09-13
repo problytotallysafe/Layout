@@ -43,6 +43,8 @@ button { -webkit-tap-highlight-color: transparent; }
 .header-actions { justify-content: flex-end; gap: 7px; }
 .save-state { display: flex; align-items: center; gap: 5px; color: #b8c4bf; font-size: .8rem; margin-right: 4px; }
 .save-state.is-saved { color: #d9c088; }
+.save-state.offline, .save-state.failed { color: #f0c2a8; }
+.save-state.conflict { color: #ffd88a; }
 .icon-button, .zoom-controls button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #48665b; border-radius: 9px; background: #173d31; color: white; cursor: pointer; }
 .icon-button:disabled { opacity: .35; cursor: default; }
 
@@ -69,6 +71,16 @@ button { -webkit-tap-highlight-color: transparent; }
 .layout-card-actions button { width: 34px; height: 34px; border-radius: 9px; }
 .layout-card-actions button.danger { color: var(--danger); background: #fff7f5; }
 .library-note { margin: 13px 2px 0; color: var(--muted); font-size: .7rem; line-height: 1.4; }
+
+.conflict-backdrop { position: fixed; z-index: 120; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(7,28,21,.7); backdrop-filter: blur(6px); }
+.conflict-dialog { width: min(520px, 100%); padding: 24px; border-radius: 18px; background: white; box-shadow: 0 24px 70px rgba(5,25,18,.35); }
+.conflict-dialog h2 { margin: 5px 0 8px; color: var(--ink-deep); font-size: 1.35rem; }
+.conflict-dialog p { margin: 0 0 17px; color: var(--muted); line-height: 1.5; }
+.conflict-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.conflict-options button { min-height: 82px; padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcfb; color: var(--ink-deep); text-align: left; cursor: pointer; }
+.conflict-options button:hover { border-color: var(--gold); background: #fcf8ee; }
+.conflict-options strong, .conflict-options span { display: block; }
+.conflict-options span { margin-top: 6px; color: var(--muted); font-size: .72rem; line-height: 1.35; }
 
 .workspace { min-height: calc(100dvh - 68px); display: grid; grid-template-columns: 76px minmax(0, 1fr) 332px; }
 .toolrail { padding: 14px 8px; background: white; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
