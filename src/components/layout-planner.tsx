@@ -21,6 +21,7 @@ type DragState =
   | { kind: "tile"; anchor: Point; originalOrigin: Point }
   | null;
 type Snapshot = { room: Point[]; items: DrawItem[] };
+type PinchState = { distance: number; zoom: number; canvasCenter: Point };
 
 const VIEW_W = 240;
 const VIEW_H = 160;
@@ -68,6 +69,31 @@ const roomBounds = (room: Point[]) => {
   const xs = room.map((point) => point.x);
   const ys = room.map((point) => point.y);
   return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+};
+type Bounds = ReturnType<typeof roomBounds>;
+const clampWallPoint = (point: Point, thickness: number, bounds: Bounds): Point => {
+  const halfThickness = thickness / 2;
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  const minX = Math.min(bounds.minX + halfThickness, centerX);
+  const maxX = Math.max(bounds.maxX - halfThickness, centerX);
+  const minY = Math.min(bounds.minY + halfThickness, centerY);
+  const maxY = Math.max(bounds.maxY - halfThickness, centerY);
+  return { x: clamp(point.x, minX, maxX), y: clamp(point.y, minY, maxY) };
+};
+const constrainWallToBounds = (item: DrawItem, bounds: Bounds): DrawItem => item.type === "wall" ? {
+  ...item,
+  start: clampWallPoint(item.start, item.thickness, bounds),
+  end: clampWallPoint(item.end, item.thickness, bounds),
+} : item;
+const constrainWallTranslation = (item: DrawItem, dx: number, dy: number, bounds: Bounds) => {
+  if (item.type !== "wall") return { dx, dy };
+  const halfThickness = item.thickness / 2;
+  const minDx = bounds.minX + halfThickness - Math.min(item.start.x, item.end.x);
+  const maxDx = bounds.maxX - halfThickness - Math.max(item.start.x, item.end.x);
+  const minDy = bounds.minY + halfThickness - Math.min(item.start.y, item.end.y);
+  const maxDy = bounds.maxY - halfThickness - Math.max(item.start.y, item.end.y);
+  return { dx: clamp(dx, minDx, maxDx), dy: clamp(dy, minDy, maxDy) };
 };
 const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, index) => {
   const next = room[(index + 1) % room.length];
@@ -130,24 +156,34 @@ function NumberField({ label, value, onChange, suffix, min = 0, step = 1 }: {
   );
 }
 
-function EditableDimension({ inches, label, onCommit }: { inches: number; label: string; onCommit: (inches: number) => void }) {
+function OffsetField({ inches, label, onCommit }: { inches: number; label: string; onCommit: (inches: number) => void }) {
   const rounded = Math.max(0, Math.round(inches * 8) / 8);
   return (
-    <input
-      key={`${label}-${rounded}`}
-      className="canvas-dimension-input"
-      aria-label={label}
-      defaultValue={formatLength(rounded)}
-      onPointerDown={(event) => event.stopPropagation()}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") event.currentTarget.blur();
-      }}
-      onBlur={(event) => {
-        const parsed = parseLength(event.currentTarget.value);
-        if (parsed !== null && parsed >= 0) onCommit(parsed);
-        else event.currentTarget.value = formatLength(rounded);
-      }}
-    />
+    <label className="field offset-field">
+      <span>{label}</span>
+      <span className="number-input">
+        <input
+          key={`${label}-${rounded}`}
+          aria-label={label}
+          defaultValue={formatLength(rounded)}
+          onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+          onBlur={(event) => {
+            const parsed = parseLength(event.currentTarget.value);
+            if (parsed !== null && parsed >= 0) onCommit(parsed);
+            else event.currentTarget.value = formatLength(rounded);
+          }}
+        />
+      </span>
+    </label>
+  );
+}
+
+function WallOffsetLabel({ x, y, inches, side }: { x: number; y: number; inches: number; side: "left" | "right" | "top" | "bottom" }) {
+  return (
+    <g className="wall-offset-label" transform={`translate(${x} ${y})`}>
+      <rect x="-17" y="-3.4" width="34" height="6.8" rx="2" />
+      <text y="1.25">{formatLength(inches)} from {side}</text>
+    </g>
   );
 }
 
@@ -187,6 +223,9 @@ export function LayoutPlanner() {
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [future, setFuture] = useState<Snapshot[]>([]);
   const svgRef = useRef<SVGSVGElement>(null);
+  const touchPointsRef = useRef(new Map<number, Point>());
+  const pinchRef = useRef<PinchState | null>(null);
+  const pinchPointerIdsRef = useRef(new Set<number>());
 
   const bounds = useMemo(() => roomBounds(room), [room]);
   const actualTileW = rotation === 0 ? tileWidth : tileHeight;
@@ -260,8 +299,9 @@ export function LayoutPlanner() {
       try {
         const parsed = JSON.parse(stored) as Snapshot & { projectName?: string; tileWidth?: number; tileHeight?: number; grout?: number; origin?: Point; rotation?: 0 | 90; materialUnit?: MaterialUnit; tileAppearance?: TileAppearance; wastePercent?: number };
         if (parsed.projectName) setProjectName(parsed.projectName);
+        const restoredRoom = parsed.room?.length >= 3 ? parsed.room : DEFAULT_ROOM;
         if (parsed.room?.length >= 3) setRoom(parsed.room);
-        if (parsed.items) setItems(parsed.items);
+        if (parsed.items) setItems(parsed.items.map((item) => constrainWallToBounds(item, roomBounds(restoredRoom))));
         if (parsed.tileWidth) setTileWidth(parsed.tileWidth);
         if (parsed.tileHeight) setTileHeight(parsed.tileHeight);
         if (parsed.grout) setGrout(parsed.grout);
@@ -306,8 +346,57 @@ export function LayoutPlanner() {
     setZoom(clampedZoom);
   };
 
+  const beginPointerTracking = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (event.pointerType !== "touch") return;
+    touchPointsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (touchPointsRef.current.size !== 2) return;
+    const [first, second] = [...touchPointsRef.current.entries()];
+    const rect = event.currentTarget.getBoundingClientRect();
+    const centerClient = { x: (first[1].x + second[1].x) / 2, y: (first[1].y + second[1].y) / 2 };
+    pinchPointerIdsRef.current.add(first[0]);
+    pinchPointerIdsRef.current.add(second[0]);
+    pinchRef.current = {
+      distance: Math.max(1, distance(first[1], second[1])),
+      zoom,
+      canvasCenter: {
+        x: pan.x + (centerClient.x - rect.left) / rect.width * VIEW_W / zoom,
+        y: pan.y + (centerClient.y - rect.top) / rect.height * VIEW_H / zoom,
+      },
+    };
+    setDrag(null);
+  };
+
+  const movePointerTracking = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (event.pointerType !== "touch" || !touchPointsRef.current.has(event.pointerId)) return;
+    touchPointsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const pinch = pinchRef.current;
+    if (!pinch || touchPointsRef.current.size < 2) return;
+    event.preventDefault();
+    const [first, second] = [...touchPointsRef.current.values()];
+    const rect = event.currentTarget.getBoundingClientRect();
+    const centerClient = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+    const nextZoom = clamp(pinch.zoom * distance(first, second) / pinch.distance, 0.75, 2.5);
+    const visibleW = VIEW_W / nextZoom;
+    const visibleH = VIEW_H / nextZoom;
+    const fractionX = (centerClient.x - rect.left) / rect.width;
+    const fractionY = (centerClient.y - rect.top) / rect.height;
+    setZoom(nextZoom);
+    setPan({
+      x: clamp(pinch.canvasCenter.x - fractionX * visibleW, 0, Math.max(0, VIEW_W - visibleW)),
+      y: clamp(pinch.canvasCenter.y - fractionY * visibleH, 0, Math.max(0, VIEW_H - visibleH)),
+    });
+  };
+
+  const endPointerTracking = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (event.pointerType !== "touch") return;
+    touchPointsRef.current.delete(event.pointerId);
+    if (touchPointsRef.current.size < 2) pinchRef.current = null;
+  };
+
   const startDrawing = (event: React.PointerEvent<SVGSVGElement>) => {
-    const point = pointerPoint(event);
+    if (pinchRef.current) return;
+    const rawPoint = pointerPoint(event);
+    const point = tool === "wall" ? clampWallPoint(rawPoint, wallThickness, bounds) : rawPoint;
     if (tool === "pan") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setDrag({ kind: "pan", clientX: event.clientX, clientY: event.clientY, origin: pan });
@@ -327,6 +416,7 @@ export function LayoutPlanner() {
   };
 
   const movePointer = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (pinchRef.current) return;
     if (!drag) return;
     if (drag.kind === "pan") {
       const rect = event.currentTarget.getBoundingClientRect();
@@ -338,7 +428,8 @@ export function LayoutPlanner() {
       });
       return;
     }
-    const point = pointerPoint(event);
+    const rawPoint = pointerPoint(event);
+    const point = drag.kind === "draw" && tool === "wall" ? clampWallPoint(rawPoint, wallThickness, bounds) : rawPoint;
     if (drag.kind === "tile") {
       setOrigin({
         x: drag.originalOrigin.x + point.x - drag.anchor.x,
@@ -354,32 +445,46 @@ export function LayoutPlanner() {
       return;
     }
     if (drag.kind === "item") {
-      const dx = point.x - drag.anchor.x;
-      const dy = point.y - drag.anchor.y;
+      const requestedDx = point.x - drag.anchor.x;
+      const requestedDy = point.y - drag.anchor.y;
       setItems((current) => current.map((item) => item.id === drag.id ? {
         ...item,
-        start: { x: drag.originalStart.x + dx, y: drag.originalStart.y + dy },
-        end: { x: drag.originalEnd.x + dx, y: drag.originalEnd.y + dy },
+        ...(() => {
+          const original = { ...item, start: drag.originalStart, end: drag.originalEnd };
+          const delta = constrainWallTranslation(original, requestedDx, requestedDy, bounds);
+          return {
+            start: { x: drag.originalStart.x + delta.dx, y: drag.originalStart.y + delta.dy },
+            end: { x: drag.originalEnd.x + delta.dx, y: drag.originalEnd.y + delta.dy },
+          };
+        })(),
       } : item));
       return;
     }
     setItems((current) => current.map((item) => {
       if (item.id !== drag.id) return item;
       const other = drag.endpoint === "start" ? item.end : item.start;
-      const dx = Math.abs(point.x - other.x);
-      const dy = Math.abs(point.y - other.y);
+      const boundedPoint = item.type === "wall" ? clampWallPoint(point, item.thickness, bounds) : point;
+      const dx = Math.abs(boundedPoint.x - other.x);
+      const dy = Math.abs(boundedPoint.y - other.y);
       const snapped = item.type === "wall" && !event.altKey
-        ? (dx > dy ? { x: point.x, y: other.y } : { x: other.x, y: point.y })
-        : point;
+        ? (dx > dy ? { x: boundedPoint.x, y: other.y } : { x: other.x, y: boundedPoint.y })
+        : boundedPoint;
       return { ...item, [drag.endpoint]: snapped };
     }));
   };
 
   const endPointer = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (pinchPointerIdsRef.current.has(event.pointerId)) {
+      pinchPointerIdsRef.current.delete(event.pointerId);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      setDrag(null);
+      return;
+    }
     if (!drag) return;
     if (drag.kind === "draw" && distance(drag.start, drag.current) >= 3) {
       snapshot();
-      const next: DrawItem = { id: uid(), type: tool === "opening" ? "opening" : "wall", start: drag.start, end: drag.current, thickness: wallThickness };
+      const rawNext: DrawItem = { id: uid(), type: tool === "opening" ? "opening" : "wall", start: drag.start, end: drag.current, thickness: wallThickness };
+      const next = constrainWallToBounds(rawNext, bounds);
       setItems((current) => [...current, next]);
       setSelectedId(next.id);
       setTool("select");
@@ -389,18 +494,26 @@ export function LayoutPlanner() {
   };
 
   const beginEndpointDrag = (event: React.PointerEvent<SVGCircleElement>, id: string, endpoint: "start" | "end") => {
+    if (pinchRef.current) return;
     event.stopPropagation(); snapshot();
     svgRef.current?.setPointerCapture(event.pointerId); setDrag({ kind: "endpoint", id, endpoint });
   };
   const beginItemDrag = (event: React.PointerEvent<SVGGElement>, item: DrawItem) => {
-    if (tool !== "select") return;
+    if (tool !== "select" || pinchRef.current) return;
     event.stopPropagation();
     snapshot();
     setSelectedId(item.id);
     svgRef.current?.setPointerCapture(event.pointerId);
     setDrag({ kind: "item", id: item.id, anchor: clientPoint(event.clientX, event.clientY), originalStart: item.start, originalEnd: item.end });
   };
-  const finishRoom = () => { if (draftRoom.length < 3) return; snapshot(); setRoom(draftRoom); setDraftRoom([]); setTool("select"); };
+  const finishRoom = () => {
+    if (draftRoom.length < 3) return;
+    snapshot();
+    setRoom(draftRoom);
+    setItems((current) => current.map((item) => constrainWallToBounds(item, roomBounds(draftRoom))));
+    setDraftRoom([]);
+    setTool("select");
+  };
   const cancelRoom = () => { setDraftRoom([]); setTool("select"); };
   const autoBalance = () => setOrigin({ x: xCuts.offset, y: yCuts.offset });
   const favorOpening = () => {
@@ -419,19 +532,26 @@ export function LayoutPlanner() {
     if (!selected || nextLength <= 0) return;
     const currentLength = distance(selected.start, selected.end) || 1;
     const scale = nextLength / currentLength;
-    setItems((current) => current.map((item) => item.id === selected.id ? { ...item, end: {
-      x: item.start.x + (item.end.x - item.start.x) * scale,
-      y: item.start.y + (item.end.y - item.start.y) * scale,
-    }} : item));
+    setItems((current) => current.map((item) => {
+      if (item.id !== selected.id) return item;
+      const end = {
+        x: item.start.x + (item.end.x - item.start.x) * scale,
+        y: item.start.y + (item.end.y - item.start.y) * scale,
+      };
+      return { ...item, end: item.type === "wall" ? clampWallPoint(end, item.thickness, bounds) : end };
+    }));
   };
   const resizeRectangle = (axis: "width" | "height", value: number) => {
     if (!isRectangle(room) || value < 24) return;
     snapshot();
     const b = roomBounds(room);
-    setRoom(room.map((point) => ({
+    const nextRoom = room.map((point) => ({
       x: axis === "width" && point.x === b.maxX ? b.minX + value : point.x,
       y: axis === "height" && point.y === b.maxY ? b.minY + value : point.y,
-    })));
+    }));
+    const nextBounds = roomBounds(nextRoom);
+    setRoom(nextRoom);
+    setItems((current) => current.map((item) => constrainWallToBounds(item, nextBounds)));
   };
   const undo = () => {
     const previous = history.at(-1); if (!previous) return;
@@ -553,7 +673,9 @@ export function LayoutPlanner() {
 
           <div className={`canvas-wrap tool-${tool}`}>
             <svg ref={svgRef} className="drawing-canvas" viewBox={`${pan.x} ${pan.y} ${VIEW_W / zoom} ${VIEW_H / zoom}`}
-              onPointerDown={startDrawing} onPointerMove={movePointer} onPointerUp={endPointer}
+              onPointerDownCapture={beginPointerTracking} onPointerMoveCapture={movePointerTracking}
+              onPointerUpCapture={endPointerTracking} onPointerCancelCapture={endPointerTracking}
+              onPointerDown={startDrawing} onPointerMove={movePointer} onPointerUp={endPointer} onPointerCancel={endPointer}
               onWheel={(event) => { event.preventDefault(); changeZoom(zoom * (event.deltaY > 0 ? .9 : 1.1)); }}
               role="img" aria-label="Editable floor plan and tile layout">
               <defs>
@@ -615,39 +737,31 @@ export function LayoutPlanner() {
               {dimensionedWall && guideWallMidpoint && guideWallOrientation === "vertical" && <g className="wall-offset-guides">
                 <line x1={bounds.minX} y1={guideWallMidpoint.y} x2={guideLeftFace} y2={guideWallMidpoint.y} />
                 <line x1={guideRightFace} y1={guideWallMidpoint.y} x2={bounds.maxX} y2={guideWallMidpoint.y} />
-                <foreignObject x={(bounds.minX + guideLeftFace) / 2 - 13} y={guideWallMidpoint.y - 4} width="26" height="8">
-                  <EditableDimension inches={guideLeftFace - bounds.minX} label="Distance from left border to wall face" onCommit={(value) => setWallOffset("left", value)} />
-                </foreignObject>
-                <foreignObject x={(guideRightFace + bounds.maxX) / 2 - 13} y={guideWallMidpoint.y - 4} width="26" height="8">
-                  <EditableDimension inches={bounds.maxX - guideRightFace} label="Distance from right border to wall face" onCommit={(value) => setWallOffset("right", value)} />
-                </foreignObject>
+                <WallOffsetLabel x={(bounds.minX + guideLeftFace) / 2} y={guideWallMidpoint.y} inches={guideLeftFace - bounds.minX} side="left" />
+                <WallOffsetLabel x={(guideRightFace + bounds.maxX) / 2} y={guideWallMidpoint.y} inches={bounds.maxX - guideRightFace} side="right" />
               </g>}
               {dimensionedWall && guideWallMidpoint && guideWallOrientation === "horizontal" && <g className="wall-offset-guides">
                 <line x1={guideWallMidpoint.x} y1={bounds.minY} x2={guideWallMidpoint.x} y2={guideTopFace} />
                 <line x1={guideWallMidpoint.x} y1={guideBottomFace} x2={guideWallMidpoint.x} y2={bounds.maxY} />
-                <foreignObject x={guideWallMidpoint.x - 13} y={(bounds.minY + guideTopFace) / 2 - 4} width="26" height="8">
-                  <EditableDimension inches={guideTopFace - bounds.minY} label="Distance from top border to wall face" onCommit={(value) => setWallOffset("top", value)} />
-                </foreignObject>
-                <foreignObject x={guideWallMidpoint.x - 13} y={(guideBottomFace + bounds.maxY) / 2 - 4} width="26" height="8">
-                  <EditableDimension inches={bounds.maxY - guideBottomFace} label="Distance from bottom border to wall face" onCommit={(value) => setWallOffset("bottom", value)} />
-                </foreignObject>
+                <WallOffsetLabel x={guideWallMidpoint.x} y={(bounds.minY + guideTopFace) / 2} inches={guideTopFace - bounds.minY} side="top" />
+                <WallOffsetLabel x={guideWallMidpoint.x} y={(guideBottomFace + bounds.maxY) / 2} inches={bounds.maxY - guideBottomFace} side="bottom" />
               </g>}
               {drag?.kind === "draw" && <g className="draft-line" pointerEvents="none"><line x1={drag.start.x} y1={drag.start.y} x2={drag.current.x} y2={drag.current.y} strokeWidth={tool === "wall" ? wallThickness : 2.5} /><text x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + drag.current.y) / 2 - 4}>{formatLength(distance(drag.start, drag.current))}</text></g>}
               {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.x - drag.start.x) < 1 && <g className="draft-offset-guides" pointerEvents="none">
                 <line x1={bounds.minX} y1={(drag.start.y + drag.current.y) / 2} x2={drag.start.x - wallThickness / 2} y2={(drag.start.y + drag.current.y) / 2} />
                 <line x1={drag.start.x + wallThickness / 2} y1={(drag.start.y + drag.current.y) / 2} x2={bounds.maxX} y2={(drag.start.y + drag.current.y) / 2} />
-                <text x={(bounds.minX + drag.start.x - wallThickness / 2) / 2} y={(drag.start.y + drag.current.y) / 2 - 2}>{formatLength(drag.start.x - wallThickness / 2 - bounds.minX)} from left</text>
-                <text x={(drag.start.x + wallThickness / 2 + bounds.maxX) / 2} y={(drag.start.y + drag.current.y) / 2 - 2}>{formatLength(bounds.maxX - drag.start.x - wallThickness / 2)} from right</text>
+                <WallOffsetLabel x={(bounds.minX + drag.start.x - wallThickness / 2) / 2} y={(drag.start.y + drag.current.y) / 2} inches={drag.start.x - wallThickness / 2 - bounds.minX} side="left" />
+                <WallOffsetLabel x={(drag.start.x + wallThickness / 2 + bounds.maxX) / 2} y={(drag.start.y + drag.current.y) / 2} inches={bounds.maxX - drag.start.x - wallThickness / 2} side="right" />
               </g>}
               {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.y - drag.start.y) < 1 && <g className="draft-offset-guides" pointerEvents="none">
                 <line x1={(drag.start.x + drag.current.x) / 2} y1={bounds.minY} x2={(drag.start.x + drag.current.x) / 2} y2={drag.start.y - wallThickness / 2} />
                 <line x1={(drag.start.x + drag.current.x) / 2} y1={drag.start.y + wallThickness / 2} x2={(drag.start.x + drag.current.x) / 2} y2={bounds.maxY} />
-                <text x={(drag.start.x + drag.current.x) / 2 + 3} y={(bounds.minY + drag.start.y - wallThickness / 2) / 2}>{formatLength(drag.start.y - wallThickness / 2 - bounds.minY)} from top</text>
-                <text x={(drag.start.x + drag.current.x) / 2 + 3} y={(drag.start.y + wallThickness / 2 + bounds.maxY) / 2}>{formatLength(bounds.maxY - drag.start.y - wallThickness / 2)} from bottom</text>
+                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={(bounds.minY + drag.start.y - wallThickness / 2) / 2} inches={drag.start.y - wallThickness / 2 - bounds.minY} side="top" />
+                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + wallThickness / 2 + bounds.maxY) / 2} inches={bounds.maxY - drag.start.y - wallThickness / 2} side="bottom" />
               </g>}
               {draftRoom.length > 0 && <g className="draft-room" pointerEvents="none"><polyline points={draftPath} />{draftRoom.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="2" />)}</g>}
             </svg>
-            <div className="scale-note">Each small square = 3 inches</div>
+            <div className="scale-note">Each small square = 3 inches · Pinch to zoom</div>
           </div>
         </section>
 
@@ -655,8 +769,16 @@ export function LayoutPlanner() {
           {selected ? <section className="panel selected-panel">
             <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? "Wall" : "Opening"}</strong></div>
             <NumberField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} suffix="in" min={1} />
-            <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => setItems((current) => current.map((item) => item.id === selected.id ? { ...item, thickness: value } : item))} suffix="in" min={1} step={.5} />
-            {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure from both room borders to the nearest wall face—click either value to enter an exact offset. The guides are visible only while this wall is selected.</p>}
+            <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => setItems((current) => current.map((item) => item.id === selected.id ? constrainWallToBounds({ ...item, thickness: value }, bounds) : item))} suffix="in" min={1} step={.5} />
+            {selected.type === "wall" && guideWallOrientation === "vertical" && <div className="field-row wall-offset-fields">
+              <OffsetField label="From left" inches={guideLeftFace - bounds.minX} onCommit={(value) => setWallOffset("left", value)} />
+              <OffsetField label="From right" inches={bounds.maxX - guideRightFace} onCommit={(value) => setWallOffset("right", value)} />
+            </div>}
+            {selected.type === "wall" && guideWallOrientation === "horizontal" && <div className="field-row wall-offset-fields">
+              <OffsetField label="From top" inches={guideTopFace - bounds.minY} onCommit={(value) => setWallOffset("top", value)} />
+              <OffsetField label="From bottom" inches={bounds.maxY - guideBottomFace} onCommit={(value) => setWallOffset("bottom", value)} />
+            </div>}
+            {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure from both room borders to the nearest wall face. Use the fields above to enter an exact offset. The guides are visible only while this wall is selected.</p>}
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
             <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); setSelectedId(null); }}>Delete {selected.type}</button>
           </section> : <section className="panel">
