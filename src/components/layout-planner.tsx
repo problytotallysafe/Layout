@@ -170,7 +170,6 @@ export function LayoutPlanner() {
   ]);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [dimensionedWallId, setDimensionedWallId] = useState<string | null>("sample-wall");
   const [drag, setDrag] = useState<DragState>(null);
   const [tileWidth, setTileWidth] = useState(12);
   const [tileHeight, setTileHeight] = useState(24);
@@ -244,7 +243,7 @@ export function LayoutPlanner() {
   const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles), [roomWidth, actualTileW, grout, origin.x, xObstacles]);
   const currentYCuts = useMemo(() => assessAxis(roomHeight, actualTileH, grout, origin.y, yObstacles), [roomHeight, actualTileH, grout, origin.y, yObstacles]);
   const selected = items.find((item) => item.id === selectedId) ?? null;
-  const dimensionedWall = items.find((item) => item.id === dimensionedWallId && item.type === "wall") ?? null;
+  const dimensionedWall = tool === "select" && selected?.type === "wall" ? selected : null;
   const minimumCut = Math.min(currentXCuts.minimum, currentYCuts.minimum);
   const cutWarning = minimumCut < Math.min(actualTileW, actualTileH) / 2;
 
@@ -383,7 +382,6 @@ export function LayoutPlanner() {
       const next: DrawItem = { id: uid(), type: tool === "opening" ? "opening" : "wall", start: drag.start, end: drag.current, thickness: wallThickness };
       setItems((current) => [...current, next]);
       setSelectedId(next.id);
-      if (next.type === "wall") setDimensionedWallId(next.id);
       setTool("select");
     }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
@@ -392,7 +390,6 @@ export function LayoutPlanner() {
 
   const beginEndpointDrag = (event: React.PointerEvent<SVGCircleElement>, id: string, endpoint: "start" | "end") => {
     event.stopPropagation(); snapshot();
-    if (items.find((item) => item.id === id)?.type === "wall") setDimensionedWallId(id);
     svgRef.current?.setPointerCapture(event.pointerId); setDrag({ kind: "endpoint", id, endpoint });
   };
   const beginItemDrag = (event: React.PointerEvent<SVGGElement>, item: DrawItem) => {
@@ -400,7 +397,6 @@ export function LayoutPlanner() {
     event.stopPropagation();
     snapshot();
     setSelectedId(item.id);
-    if (item.type === "wall") setDimensionedWallId(item.id);
     svgRef.current?.setPointerCapture(event.pointerId);
     setDrag({ kind: "item", id: item.id, anchor: clientPoint(event.clientX, event.clientY), originalStart: item.start, originalEnd: item.end });
   };
@@ -660,9 +656,9 @@ export function LayoutPlanner() {
             <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? "Wall" : "Opening"}</strong></div>
             <NumberField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} suffix="in" min={1} />
             <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => setItems((current) => current.map((item) => item.id === selected.id ? { ...item, thickness: value } : item))} suffix="in" min={1} step={.5} />
-            {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure from each border to the nearest wall face—click either value to enter an exact offset. The guide stays pinned after deselection.</p>}
+            {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure from both room borders to the nearest wall face—click either value to enter an exact offset. The guides are visible only while this wall is selected.</p>}
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
-            <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); if (dimensionedWallId === selected.id) setDimensionedWallId(null); setSelectedId(null); }}>Delete {selected.type}</button>
+            <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); setSelectedId(null); }}>Delete {selected.type}</button>
           </section> : <section className="panel">
             <div className="panel-heading"><span className="eyebrow">Room</span><strong>{isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom shape"}</strong></div>
             {isRectangle(room) && <div className="field-row"><NumberField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} suffix="in" min={24} /><NumberField label="Length" value={roomHeight} onChange={(value) => resizeRectangle("height", value)} suffix="in" min={24} /></div>}
