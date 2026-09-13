@@ -219,6 +219,9 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
 
+.readonly-banner { padding: 9px 16px; border-bottom: 1px solid #dfc58f; background: #fff6df; color: #684d1f; text-align: center; font-size: .8rem; font-weight: 750; }
+.workspace-readonly { pointer-events: none; opacity: .92; }
+
 @page { size: landscape; margin: .35in; }
 @media print {
   html, body { width: 100%; min-height: 0; background: white; color: #17221e; }

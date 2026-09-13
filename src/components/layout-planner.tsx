@@ -2,13 +2,14 @@
 
 import {
   BrickWall, Check, ChevronDown, Copy, DoorOpen, FolderOpen, Grid3X3, Hand, MousePointer2, Move,
-  PencilRuler, Plus, Printer, Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Trash2, Undo2, X,
+  PencilRuler, Plus, Printer, Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Trash2, Undo2, X, Download, Upload, ExternalLink,
   ZoomIn, ZoomOut,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { decodeSuiteHash, downloadSuite, layoutToSuite, suiteLink, suiteToLayout } from "@/lib/suite-exchange";
 
-type Point = { x: number; y: number };
-type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
+export type Point = { x: number; y: number };
+export type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
 type Tool = "select" | "pan" | "floor" | "room" | "wall" | "opening";
 type MaterialUnit = "in" | "mm" | "cm";
 type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
@@ -22,7 +23,7 @@ type DragState =
   | null;
 type Snapshot = { room: Point[]; items: DrawItem[] };
 type PinchState = { distance: number; zoom: number; canvasCenter: Point };
-type LayoutData = Snapshot & {
+export type LayoutData = Snapshot & {
   projectName: string;
   tileWidth: number;
   tileHeight: number;
@@ -35,7 +36,7 @@ type LayoutData = Snapshot & {
   rotation: 0 | 90;
   showTile: boolean;
 };
-type SavedLayout = LayoutData & { id: string; updatedAt: number };
+export type SavedLayout = LayoutData & { id: string; updatedAt: number };
 
 const VIEW_W = 240;
 const VIEW_H = 160;
@@ -273,6 +274,7 @@ export function LayoutPlanner() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [printing, setPrinting] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [future, setFuture] = useState<Snapshot[]>([]);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -280,6 +282,8 @@ export function LayoutPlanner() {
   const touchPointsRef = useRef(new Map<number, Point>());
   const pinchRef = useRef<PinchState | null>(null);
   const pinchPointerIdsRef = useRef(new Set<number>());
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const deepLinkHandledRef = useRef(false);
 
   const bounds = useMemo(() => roomBounds(room), [room]);
   const actualTileW = rotation === 0 ? tileWidth : tileHeight;
@@ -455,6 +459,15 @@ export function LayoutPlanner() {
   }, [applyLayout, persistLibrary]);
 
   useEffect(() => {
+    if (!hydrated || deepLinkHandledRef.current) return;
+    deepLinkHandledRef.current = true;
+    const shared=decodeSuiteHash(window.location.hash);if(!shared)return;
+    const imported=suiteToLayout(shared);if(!imported.layout){window.alert(imported.error||"The shared room could not be opened.");return}
+    const next=savedLayoutsRef.current.some(item=>item.id===imported.layout!.id)?savedLayoutsRef.current.map(item=>item.id===imported.layout!.id?imported.layout!:item):[imported.layout!,...savedLayoutsRef.current];
+    persistLibrary(next,imported.layout.id);setActiveLayoutId(imported.layout.id);applyLayout(imported.layout);setReadOnly(Boolean(imported.readOnly));window.history.replaceState(null,"",window.location.pathname+window.location.search);if(imported.warning)window.alert(imported.warning);
+  },[applyLayout,hydrated,persistLibrary]);
+
+  useEffect(() => {
     if (!hydrated || !activeLayoutId) return;
     const pendingTimer = window.setTimeout(() => setSaved(false), 0);
     const timer = window.setTimeout(() => {
@@ -531,6 +544,10 @@ export function LayoutPlanner() {
       setPrinting(false);
     }));
   };
+
+  const exportShared=()=>{const savedLayout=saveCurrentLayout();if(savedLayout)downloadSuite(layoutToSuite(savedLayout),savedLayout.projectName)};
+  const importShared=async(file?:File)=>{if(!file)return;try{const imported=suiteToLayout(JSON.parse(await file.text()));if(!imported.layout)throw new Error(imported.error);const next=savedLayoutsRef.current.some(item=>item.id===imported.layout!.id)?savedLayoutsRef.current.map(item=>item.id===imported.layout!.id?imported.layout!:item):[imported.layout!,...savedLayoutsRef.current];persistLibrary(next,imported.layout.id);setActiveLayoutId(imported.layout.id);applyLayout(imported.layout);setReadOnly(Boolean(imported.readOnly));if(imported.warning)window.alert(imported.warning)}catch(error){window.alert(error instanceof Error?error.message:"This shared file could not be opened.")}};
+  const returnToBuildr=()=>{const savedLayout=saveCurrentLayout();if(!savedLayout)return;window.location.href=suiteLink(process.env.NEXT_PUBLIC_BUILDR_URL||"https://buildr-orcin.vercel.app",layoutToSuite(savedLayout))};
 
   const clientPoint = (clientX: number, clientY: number): Point => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -841,6 +858,7 @@ export function LayoutPlanner() {
 
   return (
     <main className="app-shell">
+      <input ref={importInputRef} hidden type="file" accept=".json,.buildr.json,application/json" onChange={(event)=>{void importShared(event.target.files?.[0]);event.currentTarget.value=""}}/>
       <header className="topbar">
         <div className="brand" aria-label="Layout by Buildr">
           <span className="brand-mark"><PencilRuler size={22} strokeWidth={2.25} /></span>
@@ -853,11 +871,15 @@ export function LayoutPlanner() {
         <div className="header-actions">
           <span className={`save-state ${saved ? "is-saved" : ""}`}>{saved ? <Check size={14} /> : <Save size={14} />}{saved ? "Saved" : "Saving"}</span>
           <button className="icon-button" onClick={() => { saveCurrentLayout(); setLibraryOpen(true); }} aria-label="Saved layouts" title="Saved layouts"><FolderOpen size={18} /></button>
+          <button className="icon-button" onClick={()=>importInputRef.current?.click()} aria-label="Import shared project" title="Import shared project"><Upload size={18}/></button>
+          <button className="icon-button" onClick={exportShared} aria-label="Export shared project" title="Export shared project"><Download size={18}/></button>
+          <button className="icon-button" onClick={returnToBuildr} aria-label="Return result to Buildr" title="Return result to Buildr"><ExternalLink size={18}/></button>
           <button className="icon-button" onClick={printLayout} aria-label="Print layout" title="Print layout"><Printer size={18} /></button>
           <button className="icon-button" onClick={undo} disabled={!history.length} aria-label="Undo"><Undo2 size={18} /></button>
           <button className="icon-button" onClick={redo} disabled={!future.length} aria-label="Redo"><Redo2 size={18} /></button>
         </div>
       </header>
+      {readOnly&&<div className="readonly-banner">Created by a newer Buildr app version · view, print, and export only</div>}
 
       {libraryOpen && <div className="library-backdrop" role="presentation" onPointerDown={() => setLibraryOpen(false)}>
         <section className="layout-library" role="dialog" aria-modal="true" aria-labelledby="layout-library-title" onPointerDown={(event) => event.stopPropagation()}>
@@ -884,7 +906,7 @@ export function LayoutPlanner() {
         </section>
       </div>}
 
-      <section className="workspace">
+      <section className={readOnly?"workspace workspace-readonly":"workspace"}>
         <nav className="toolrail" aria-label="Drawing tools">
           {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"] ] as const).map(([value, Icon, label]) => (
             <button key={value} className={tool === value ? "active" : ""} onClick={() => { setTool(value); setDraftRoom([]); setSelectedId(null); }} aria-pressed={tool === value}>
