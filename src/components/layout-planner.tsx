@@ -35,6 +35,7 @@ export type LayoutData = Snapshot & {
   origin: Point;
   rotation: 0 | 90;
   showTile: boolean;
+  suiteContext?: { organizationId: string | null; buildrProjectId: string | null; importKey: string };
 };
 export type SavedLayout = LayoutData & { id: string; updatedAt: number };
 
@@ -266,6 +267,7 @@ export function LayoutPlanner() {
   const [origin, setOrigin] = useState<Point>({ x: 0, y: 0 });
   const [rotation, setRotation] = useState<0 | 90>(0);
   const [showTile, setShowTile] = useState(true);
+  const [suiteContext, setSuiteContext] = useState<LayoutData["suiteContext"]>();
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [saved, setSaved] = useState(true);
@@ -365,6 +367,7 @@ export function LayoutPlanner() {
     setOrigin(layout.origin);
     setRotation(layout.rotation);
     setShowTile(layout.showTile);
+    setSuiteContext(layout.suiteContext);
     setSelectedId(null);
     setDraftRoom([]);
     setTool("select");
@@ -399,6 +402,7 @@ export function LayoutPlanner() {
       origin,
       rotation,
       showTile,
+      suiteContext,
     };
     const existingIndex = savedLayoutsRef.current.findIndex((layout) => layout.id === activeLayoutId);
     const next = existingIndex >= 0
@@ -408,7 +412,7 @@ export function LayoutPlanner() {
     window.localStorage.setItem(LEGACY_DRAFT_KEY, JSON.stringify(document));
     setSaved(true);
     return document;
-  }, [activeLayoutId, grout, items, materialUnit, origin, persistLibrary, projectName, room, rotation, showTile, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
+  }, [activeLayoutId, grout, items, materialUnit, origin, persistLibrary, projectName, room, rotation, showTile, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -547,7 +551,7 @@ export function LayoutPlanner() {
 
   const exportShared=()=>{const savedLayout=saveCurrentLayout();if(savedLayout)downloadSuite(layoutToSuite(savedLayout),savedLayout.projectName)};
   const importShared=async(file?:File)=>{if(!file)return;try{const imported=suiteToLayout(JSON.parse(await file.text()));if(!imported.layout)throw new Error(imported.error);const next=savedLayoutsRef.current.some(item=>item.id===imported.layout!.id)?savedLayoutsRef.current.map(item=>item.id===imported.layout!.id?imported.layout!:item):[imported.layout!,...savedLayoutsRef.current];persistLibrary(next,imported.layout.id);setActiveLayoutId(imported.layout.id);applyLayout(imported.layout);setReadOnly(Boolean(imported.readOnly));if(imported.warning)window.alert(imported.warning)}catch(error){window.alert(error instanceof Error?error.message:"This shared file could not be opened.")}};
-  const returnToBuildr=()=>{const savedLayout=saveCurrentLayout();if(!savedLayout)return;window.location.href=suiteLink(process.env.NEXT_PUBLIC_BUILDR_URL||"https://buildr-orcin.vercel.app",layoutToSuite(savedLayout))};
+  const returnToBuildr=()=>{const savedLayout=saveCurrentLayout();if(!savedLayout)return;const base=process.env.NEXT_PUBLIC_BUILDR_URL||"https://buildr-orcin.vercel.app";const target=savedLayout.suiteContext?.buildrProjectId?`${base.replace(/\/$/,"")}/projects/${savedLayout.suiteContext.buildrProjectId}`:base;window.location.href=suiteLink(target,layoutToSuite(savedLayout))};
 
   const clientPoint = (clientX: number, clientY: number): Point => {
     const rect = svgRef.current?.getBoundingClientRect();
