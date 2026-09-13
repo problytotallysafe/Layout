@@ -2,6 +2,21 @@ import type { SavedLayout } from "@/components/layout-planner";
 import type { LayoutConflict } from "@/lib/layout-sync";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
+const DELETION_QUEUE_KEY = "layout-cloud-deletion-queue-v1";
+
+export function pendingCloudDeletions() {
+  if (typeof window === "undefined") return [] as string[];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DELETION_QUEUE_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch { return [] as string[]; }
+}
+
+export function queueCloudDeletion(id: string) {
+  const next = [...new Set([...pendingCloudDeletions(), id])];
+  window.localStorage.setItem(DELETION_QUEUE_KEY, JSON.stringify(next));
+}
+
 async function currentUser() {
   const supabase = getSupabaseBrowserClient();
   if (!supabase) return null;
@@ -49,4 +64,18 @@ export async function deleteCloudLayout(id: string) {
   const { error } = await supabase.from("layout_documents").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("owner_id", user.id);
   if (error) throw error;
   return true;
+}
+
+export async function flushCloudDeletions() {
+  const queued = pendingCloudDeletions();
+  if (!queued.length) return true;
+  const remaining: string[] = [];
+  for (const id of queued) {
+    try {
+      const deleted = await deleteCloudLayout(id);
+      if (!deleted) remaining.push(id);
+    } catch { remaining.push(id); }
+  }
+  window.localStorage.setItem(DELETION_QUEUE_KEY, JSON.stringify(remaining));
+  return remaining.length === 0;
 }

@@ -62,6 +62,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .layout-list { max-height: min(480px, 58dvh); overflow-y: auto; display: grid; gap: 8px; padding-right: 2px; }
 .layout-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 5px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcfb; }
 .layout-card.active { border-color: var(--gold); background: #fcf8ee; }
+.layout-card.archived { opacity: .68; background: #f1f3f2; }
 .layout-open { min-width: 0; padding: 8px; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .layout-open strong, .layout-open span, .layout-open small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layout-open strong { color: var(--ink-deep); font-size: .9rem; }

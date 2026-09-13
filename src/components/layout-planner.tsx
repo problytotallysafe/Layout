@@ -1,14 +1,14 @@
 "use client";
 
 import {
-  BrickWall, Check, ChevronDown, CloudOff, Copy, DoorOpen, FolderOpen, Grid3X3, Hand, MousePointer2, Move,
+  Archive, ArchiveRestore, BrickWall, Check, ChevronDown, CloudOff, Copy, DoorOpen, FolderOpen, Grid3X3, Hand, MousePointer2, Move,
   PencilRuler, Plus, Printer, Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Trash2, Undo2, X, Download, Upload, ExternalLink,
   ZoomIn, ZoomOut,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { decodeSuiteHash, downloadSuite, layoutToSuite, suiteLink, suiteToLayout } from "@/lib/suite-exchange";
 import { mergeLayouts, type LayoutConflict } from "@/lib/layout-sync";
-import { deleteCloudLayout, loadCloudLayouts, saveCloudLayouts } from "@/lib/layout-store";
+import { flushCloudDeletions, loadCloudLayouts, pendingCloudDeletions, queueCloudDeletion, saveCloudLayouts } from "@/lib/layout-store";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
 import { SuiteAccountButton } from "@/components/suite-account";
 
@@ -39,6 +39,7 @@ export type LayoutData = Snapshot & {
   origin: Point;
   rotation: 0 | 90;
   showTile: boolean;
+  archivedAt?: number;
   suiteContext?: { organizationId: string | null; buildrProjectId: string | null; importKey: string };
 };
 export type SavedLayout = LayoutData & { id: string; revision: number; updatedAt: number };
@@ -493,9 +494,10 @@ export function LayoutPlanner() {
         return;
       }
       setSyncState("saving");
-      void loadCloudLayouts().then((cloudLayouts) => {
+      void flushCloudDeletions().then(() => loadCloudLayouts()).then((cloudLayouts) => {
         if (cancelled) return;
-        const merged = mergeLayouts(savedLayoutsRef.current, cloudLayouts);
+        const pending = new Set(pendingCloudDeletions());
+        const merged = mergeLayouts(savedLayoutsRef.current, cloudLayouts.filter((layout) => !pending.has(layout.id)));
         const currentId = window.localStorage.getItem(ACTIVE_LAYOUT_KEY) || merged.layouts[0]?.id;
         const active = merged.layouts.find((layout) => layout.id === currentId) || merged.layouts[0];
         if (active) {
@@ -548,7 +550,7 @@ export function LayoutPlanner() {
     const offline = () => setSyncState("offline");
     const online = () => {
       setSyncState("saving");
-      void saveCloudLayouts(savedLayoutsRef.current).then((result) => {
+      void flushCloudDeletions().then(() => saveCloudLayouts(savedLayoutsRef.current)).then((result) => {
         setConflicts(result.conflicts);
         setSyncState(result.conflicts.length ? "conflict" : result.cloudSaved ? "saved" : "device");
       }).catch(() => setSyncState("failed"));
@@ -609,12 +611,40 @@ export function LayoutPlanner() {
     if (!next.length) next = [blankLayout()];
     const nextActive = id === activeLayoutId ? next[0] : next.find((layout) => layout.id === activeLayoutId) || next[0];
     persistLibrary(next, nextActive.id);
-    if (navigator.onLine) void deleteCloudLayout(id).catch(() => setSyncState("failed"));
+    queueCloudDeletion(id);
+    if (navigator.onLine) void flushCloudDeletions().then((complete) => {
+      if (!complete) setSyncState("failed");
+    });
     if (id === activeLayoutId) {
       setActiveLayoutId(nextActive.id);
       applyLayout(nextActive);
     }
     setSaved(true);
+  };
+
+  const toggleArchivedLayout = (id: string) => {
+    saveCurrentLayout();
+    const next = savedLayoutsRef.current.map((layout) => layout.id === id ? {
+      ...layout,
+      archivedAt: layout.archivedAt ? undefined : Date.now(),
+      revision: layout.revision + 1,
+      updatedAt: Date.now(),
+    } : layout);
+    const changed = next.find((layout) => layout.id === id);
+    if (!changed) return;
+    let nextActive = next.find((layout) => layout.id === activeLayoutId && !layout.archivedAt)
+      || next.find((layout) => !layout.archivedAt);
+    if (!nextActive) {
+      nextActive = blankLayout();
+      next.unshift(nextActive);
+    }
+    persistLibrary(next, nextActive.id);
+    setActiveLayoutId(nextActive.id);
+    applyLayout(nextActive);
+    setSaved(true);
+    if (navigator.onLine) void saveCloudLayouts([changed]).then((result) => {
+      setSyncState(result.conflicts.length ? "conflict" : result.cloudSaved ? "saved" : "device");
+    }).catch(() => setSyncState("failed"));
   };
 
   const printLayout = () => {
@@ -1001,14 +1031,15 @@ export function LayoutPlanner() {
           <label className="library-name-field"><span>Current layout name</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
           <button className="primary new-layout-button" onClick={createNewLayout}><Plus size={17} /> New layout</button>
           <div className="layout-list">
-            {[...savedLayouts].sort((a, b) => b.updatedAt - a.updatedAt).map((layout) => <article className={`layout-card ${layout.id === activeLayoutId ? "active" : ""}`} key={layout.id}>
+            {[...savedLayouts].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt - a.updatedAt).map((layout) => <article className={`layout-card ${layout.id === activeLayoutId ? "active" : ""} ${layout.archivedAt ? "archived" : ""}`} key={layout.id}>
               <button className="layout-open" onClick={() => openSavedLayout(layout.id)}>
                 <strong>{layout.projectName}</strong>
                 <span>{formatLength(roomBounds(layout.room).maxX - roomBounds(layout.room).minX)} × {formatLength(roomBounds(layout.room).maxY - roomBounds(layout.room).minY)}</span>
-                <small>{layout.id === activeLayoutId ? "Currently editing · " : ""}Saved {new Date(layout.updatedAt).toLocaleString()}</small>
+                <small>{layout.archivedAt ? "Archived · " : layout.id === activeLayoutId ? "Currently editing · " : ""}Saved {new Date(layout.updatedAt).toLocaleString()}</small>
               </button>
               <div className="layout-card-actions">
                 <button onClick={() => duplicateSavedLayout(layout.id)} aria-label={`Duplicate ${layout.projectName}`}><Copy size={16} /></button>
+                <button onClick={() => toggleArchivedLayout(layout.id)} aria-label={`${layout.archivedAt ? "Restore" : "Archive"} ${layout.projectName}`}>{layout.archivedAt ? <ArchiveRestore size={16} /> : <Archive size={16} />}</button>
                 <button className="danger" onClick={() => deleteSavedLayout(layout.id)} aria-label={`Delete ${layout.projectName}`}><Trash2 size={16} /></button>
               </div>
             </article>)}
