@@ -10,6 +10,7 @@ import { decodeSuiteHash, downloadSuite, layoutToSuite, suiteLink, suiteToLayout
 import { mergeLayouts, type LayoutConflict } from "@/lib/layout-sync";
 import { deleteCloudLayout, loadCloudLayouts, saveCloudLayouts } from "@/lib/layout-store";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { SuiteAccountButton } from "@/components/suite-account";
 
 export type Point = { x: number; y: number };
 export type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
@@ -283,6 +284,7 @@ export function LayoutPlanner() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [cloudHydrated, setCloudHydrated] = useState(false);
+  const [authVersion, setAuthVersion] = useState(0);
   const [printing, setPrinting] = useState(false);
   const [readOnly, setReadOnly] = useState(false);
   const [history, setHistory] = useState<Snapshot[]>([]);
@@ -294,6 +296,15 @@ export function LayoutPlanner() {
   const pinchPointerIdsRef = useRef(new Set<number>());
   const importInputRef = useRef<HTMLInputElement>(null);
   const deepLinkHandledRef = useRef(false);
+
+  useEffect(() => {
+    const changed = () => {
+      setCloudHydrated(false);
+      setAuthVersion((value) => value + 1);
+    };
+    window.addEventListener("buildr:auth-change", changed);
+    return () => window.removeEventListener("buildr:auth-change", changed);
+  }, []);
 
   const bounds = useMemo(() => roomBounds(room), [room]);
   const actualTileW = rotation === 0 ? tileWidth : tileHeight;
@@ -501,7 +512,7 @@ export function LayoutPlanner() {
       });
     }, 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [applyLayout, hydrated, persistLibrary]);
+  }, [applyLayout, authVersion, hydrated, persistLibrary]);
 
   useEffect(() => {
     if (!hydrated || deepLinkHandledRef.current) return;
@@ -961,6 +972,7 @@ export function LayoutPlanner() {
           <button className="icon-button" onClick={()=>importInputRef.current?.click()} aria-label="Import shared project" title="Import shared project"><Upload size={18}/></button>
           <button className="icon-button" onClick={exportShared} aria-label="Export shared project" title="Export shared project"><Download size={18}/></button>
           <button className="icon-button" onClick={returnToBuildr} aria-label="Return result to Buildr" title="Return result to Buildr"><ExternalLink size={18}/></button>
+          <SuiteAccountButton />
           <button className="icon-button" onClick={printLayout} aria-label="Print layout" title="Print layout"><Printer size={18} /></button>
           <button className="icon-button" onClick={undo} disabled={!history.length} aria-label="Undo"><Undo2 size={18} /></button>
           <button className="icon-button" onClick={redo} disabled={!future.length} aria-label="Redo"><Redo2 size={18} /></button>

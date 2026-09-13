@@ -82,6 +82,22 @@ button { -webkit-tap-highlight-color: transparent; }
 .conflict-options strong, .conflict-options span { display: block; }
 .conflict-options span { margin-top: 6px; color: var(--muted); font-size: .72rem; line-height: 1.35; }
 
+.account-backdrop { position: fixed; z-index: 130; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(7,28,21,.7); backdrop-filter: blur(6px); }
+.account-dialog { width: min(430px, 100%); padding: 22px; border-radius: 18px; background: white; color: var(--foreground); box-shadow: 0 24px 70px rgba(5,25,18,.35); }
+.account-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
+.account-heading h2 { margin: 4px 0 0; color: var(--ink-deep); font-size: 1.3rem; }
+.account-heading > button { width: 35px; height: 35px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 9px; background: white; color: var(--ink); cursor: pointer; }
+.account-dialog p { color: var(--muted); line-height: 1.5; }
+.account-dialog form, .account-dialog label { display: grid; gap: 7px; }
+.account-dialog form { gap: 13px; margin-top: 17px; }
+.account-dialog label span { color: var(--muted); font-size: .76rem; font-weight: 750; }
+.account-dialog input { min-height: 43px; padding: 9px 11px; border: 1px solid #d6dfda; border-radius: 10px; outline: 0; }
+.account-dialog input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(209,164,78,.15); }
+.account-primary, .account-secondary { min-height: 42px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 10px; background: var(--ink); color: white; font-weight: 750; cursor: pointer; }
+.account-secondary { width: 100%; margin-top: 16px; background: #edf2ef; color: var(--ink); }
+.account-link { border: 0; background: transparent; color: var(--ink); font-size: .78rem; font-weight: 700; cursor: pointer; }
+.account-message { margin: 0; padding: 9px 10px; border-radius: 9px; background: #fff8e8; color: #735720 !important; font-size: .8rem; }
+
 .workspace { min-height: calc(100dvh - 68px); display: grid; grid-template-columns: 76px minmax(0, 1fr) 332px; }
 .toolrail { padding: 14px 8px; background: white; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
 .toolrail button, .mobile-tools button { min-height: 58px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; font-size: .72rem; cursor: pointer; }
