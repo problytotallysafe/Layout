@@ -1,8 +1,8 @@
 "use client";
 
 import {
-  BrickWall, Check, ChevronDown, DoorOpen, Grid3X3, Hand, MousePointer2, Move, PencilRuler,
-  Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Undo2,
+  BrickWall, Check, ChevronDown, Copy, DoorOpen, FolderOpen, Grid3X3, Hand, MousePointer2, Move,
+  PencilRuler, Plus, Printer, Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Trash2, Undo2, X,
   ZoomIn, ZoomOut,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -22,13 +22,47 @@ type DragState =
   | null;
 type Snapshot = { room: Point[]; items: DrawItem[] };
 type PinchState = { distance: number; zoom: number; canvasCenter: Point };
+type LayoutData = Snapshot & {
+  projectName: string;
+  tileWidth: number;
+  tileHeight: number;
+  grout: number;
+  materialUnit: MaterialUnit;
+  tileAppearance: TileAppearance;
+  wastePercent: number;
+  wallThickness: number;
+  origin: Point;
+  rotation: 0 | 90;
+  showTile: boolean;
+};
+type SavedLayout = LayoutData & { id: string; updatedAt: number };
 
 const VIEW_W = 240;
 const VIEW_H = 160;
+const LIBRARY_KEY = "layout-library-v1";
+const ACTIVE_LAYOUT_KEY = "layout-active-id-v1";
+const LEGACY_DRAFT_KEY = "layout-draft-v1";
 const DEFAULT_ROOM: Point[] = [
   { x: 48, y: 20 }, { x: 192, y: 20 }, { x: 192, y: 140 }, { x: 48, y: 140 },
 ];
 const uid = () => Math.random().toString(36).slice(2, 9);
+const blankLayout = (id = uid(), projectName = "Untitled layout"): SavedLayout => ({
+  id,
+  updatedAt: Date.now(),
+  projectName,
+  room: DEFAULT_ROOM.map((point) => ({ ...point })),
+  items: [],
+  tileWidth: 12,
+  tileHeight: 24,
+  grout: 0.125,
+  materialUnit: "in",
+  tileAppearance: "transparent",
+  wastePercent: 10,
+  wallThickness: 4.5,
+  origin: { x: 0, y: 0 },
+  rotation: 0,
+  showTile: true,
+});
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const distance = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
 const formatLength = (inches: number) => {
@@ -65,6 +99,20 @@ const polygonArea = (points: Point[]) => Math.abs(points.reduce((sum, point, ind
   const next = points[(index + 1) % points.length];
   return sum + point.x * next.y - next.x * point.y;
 }, 0)) / 2;
+const polygonCenter = (points: Point[]) => ({
+  x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+  y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+});
+const outsideDimensionPoint = (start: Point, end: Point, center: Point): Point => {
+  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  const dx = midpoint.x - center.x;
+  const dy = midpoint.y - center.y;
+  const magnitude = Math.hypot(dx, dy) || 1;
+  return {
+    x: clamp(midpoint.x + dx / magnitude * 8, 12, VIEW_W - 12),
+    y: clamp(midpoint.y + dy / magnitude * 8, 5, VIEW_H - 5),
+  };
+};
 const roomBounds = (room: Point[]) => {
   const xs = room.map((point) => point.x);
   const ys = room.map((point) => point.y);
@@ -220,9 +268,15 @@ export function LayoutPlanner() {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [saved, setSaved] = useState(true);
+  const [activeLayoutId, setActiveLayoutId] = useState<string | null>(null);
+  const [savedLayouts, setSavedLayouts] = useState<SavedLayout[]>([]);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [future, setFuture] = useState<Snapshot[]>([]);
   const svgRef = useRef<SVGSVGElement>(null);
+  const savedLayoutsRef = useRef<SavedLayout[]>([]);
   const touchPointsRef = useRef(new Map<number, Point>());
   const pinchRef = useRef<PinchState | null>(null);
   const pinchPointerIdsRef = useRef(new Set<number>());
@@ -292,36 +346,191 @@ export function LayoutPlanner() {
     setSaved(false);
   }, [room, items]);
 
-  useEffect(() => {
-    const stored = window.localStorage.getItem("layout-draft-v1");
-    if (!stored) return;
-    const timer = window.setTimeout(() => {
-      try {
-        const parsed = JSON.parse(stored) as Snapshot & { projectName?: string; tileWidth?: number; tileHeight?: number; grout?: number; origin?: Point; rotation?: 0 | 90; materialUnit?: MaterialUnit; tileAppearance?: TileAppearance; wastePercent?: number };
-        if (parsed.projectName) setProjectName(parsed.projectName);
-        const restoredRoom = parsed.room?.length >= 3 ? parsed.room : DEFAULT_ROOM;
-        if (parsed.room?.length >= 3) setRoom(parsed.room);
-        if (parsed.items) setItems(parsed.items.map((item) => constrainWallToBounds(item, roomBounds(restoredRoom))));
-        if (parsed.tileWidth) setTileWidth(parsed.tileWidth);
-        if (parsed.tileHeight) setTileHeight(parsed.tileHeight);
-        if (parsed.grout) setGrout(parsed.grout);
-        if (parsed.materialUnit) setMaterialUnit(parsed.materialUnit);
-        if (parsed.tileAppearance) setTileAppearance(parsed.tileAppearance);
-        if (parsed.wastePercent !== undefined) setWastePercent(parsed.wastePercent);
-        if (parsed.origin) setOrigin(parsed.origin);
-        if (parsed.rotation !== undefined) setRotation(parsed.rotation);
-      } catch { /* Ignore a malformed old draft. */ }
-    }, 0);
-    return () => window.clearTimeout(timer);
+  const applyLayout = useCallback((layout: SavedLayout) => {
+    const restoredBounds = roomBounds(layout.room);
+    setProjectName(layout.projectName);
+    setRoom(layout.room);
+    setItems(layout.items.map((item) => constrainWallToBounds(item, restoredBounds)));
+    setTileWidth(layout.tileWidth);
+    setTileHeight(layout.tileHeight);
+    setGrout(layout.grout);
+    setMaterialUnit(layout.materialUnit);
+    setTileAppearance(layout.tileAppearance);
+    setWastePercent(layout.wastePercent);
+    setWallThickness(layout.wallThickness);
+    setOrigin(layout.origin);
+    setRotation(layout.rotation);
+    setShowTile(layout.showTile);
+    setSelectedId(null);
+    setDraftRoom([]);
+    setTool("select");
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    setHistory([]);
+    setFuture([]);
   }, []);
+
+  const persistLibrary = useCallback((layouts: SavedLayout[], activeId: string) => {
+    savedLayoutsRef.current = layouts;
+    setSavedLayouts(layouts);
+    window.localStorage.setItem(LIBRARY_KEY, JSON.stringify(layouts));
+    window.localStorage.setItem(ACTIVE_LAYOUT_KEY, activeId);
+  }, []);
+
+  const saveCurrentLayout = useCallback(() => {
+    if (!activeLayoutId) return null;
+    const document: SavedLayout = {
+      id: activeLayoutId,
+      updatedAt: Date.now(),
+      projectName: projectName.trim() || "Untitled layout",
+      room,
+      items,
+      tileWidth,
+      tileHeight,
+      grout,
+      materialUnit,
+      tileAppearance,
+      wastePercent,
+      wallThickness,
+      origin,
+      rotation,
+      showTile,
+    };
+    const existingIndex = savedLayoutsRef.current.findIndex((layout) => layout.id === activeLayoutId);
+    const next = existingIndex >= 0
+      ? savedLayoutsRef.current.map((layout) => layout.id === activeLayoutId ? document : layout)
+      : [document, ...savedLayoutsRef.current];
+    persistLibrary(next, activeLayoutId);
+    window.localStorage.setItem(LEGACY_DRAFT_KEY, JSON.stringify(document));
+    setSaved(true);
+    return document;
+  }, [activeLayoutId, grout, items, materialUnit, origin, persistLibrary, projectName, room, rotation, showTile, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      window.localStorage.setItem("layout-draft-v1", JSON.stringify({ projectName, room, items, tileWidth, tileHeight, grout, materialUnit, tileAppearance, wastePercent, origin, rotation }));
+      try {
+        const storedLibrary = window.localStorage.getItem(LIBRARY_KEY);
+        const parsedLibrary = storedLibrary ? JSON.parse(storedLibrary) as Partial<SavedLayout>[] : [];
+        let layouts = Array.isArray(parsedLibrary) ? parsedLibrary.filter((layout) => layout.id && layout.room?.length && Array.isArray(layout.items)).map((layout) => {
+          const defaults = blankLayout(layout.id, layout.projectName || "Untitled layout");
+          const restoredRoom = layout.room && layout.room.length >= 3 ? layout.room : defaults.room;
+          const restoredBounds = roomBounds(restoredRoom);
+          return {
+            ...defaults,
+            ...layout,
+            id: layout.id as string,
+            room: restoredRoom,
+            items: (layout.items || []).map((item) => constrainWallToBounds(item, restoredBounds)),
+          } as SavedLayout;
+        }) : [];
+        if (!layouts.length) {
+          const legacyValue = window.localStorage.getItem(LEGACY_DRAFT_KEY);
+          if (legacyValue) {
+            const legacy = JSON.parse(legacyValue) as Partial<LayoutData>;
+            const migrated = blankLayout(uid(), legacy.projectName || "Untitled layout");
+            const restoredRoom = legacy.room && legacy.room.length >= 3 ? legacy.room : migrated.room;
+            layouts = [{
+              ...migrated,
+              ...legacy,
+              room: restoredRoom,
+              items: (legacy.items || []).map((item) => constrainWallToBounds(item, roomBounds(restoredRoom))),
+            }];
+          } else layouts = [blankLayout()];
+        }
+        const requestedId = window.localStorage.getItem(ACTIVE_LAYOUT_KEY);
+        const active = layouts.find((layout) => layout.id === requestedId) || layouts[0];
+        persistLibrary(layouts, active.id);
+        setActiveLayoutId(active.id);
+        applyLayout(active);
+      } catch {
+        const fallback = blankLayout();
+        persistLibrary([fallback], fallback.id);
+        setActiveLayoutId(fallback.id);
+        applyLayout(fallback);
+      }
       setSaved(true);
-    }, 450);
+      setHydrated(true);
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [projectName, room, items, tileWidth, tileHeight, grout, materialUnit, tileAppearance, wastePercent, origin, rotation]);
+  }, [applyLayout, persistLibrary]);
+
+  useEffect(() => {
+    if (!hydrated || !activeLayoutId) return;
+    const pendingTimer = window.setTimeout(() => setSaved(false), 0);
+    const timer = window.setTimeout(() => {
+      saveCurrentLayout();
+    }, 650);
+    return () => {
+      window.clearTimeout(pendingTimer);
+      window.clearTimeout(timer);
+    };
+  }, [activeLayoutId, hydrated, saveCurrentLayout]);
+
+  const createNewLayout = () => {
+    saveCurrentLayout();
+    const nextLayout = blankLayout();
+    const next = [nextLayout, ...savedLayoutsRef.current];
+    persistLibrary(next, nextLayout.id);
+    setActiveLayoutId(nextLayout.id);
+    applyLayout(nextLayout);
+    setLibraryOpen(false);
+    setSaved(true);
+  };
+
+  const openSavedLayout = (id: string) => {
+    saveCurrentLayout();
+    const layout = savedLayoutsRef.current.find((candidate) => candidate.id === id);
+    if (!layout) return;
+    setActiveLayoutId(layout.id);
+    window.localStorage.setItem(ACTIVE_LAYOUT_KEY, layout.id);
+    applyLayout(layout);
+    setLibraryOpen(false);
+    setSaved(true);
+  };
+
+  const duplicateSavedLayout = (id: string) => {
+    saveCurrentLayout();
+    const source = savedLayoutsRef.current.find((layout) => layout.id === id);
+    if (!source) return;
+    const duplicate: SavedLayout = {
+      ...source,
+      id: uid(),
+      projectName: `${source.projectName} copy`,
+      room: source.room.map((point) => ({ ...point })),
+      items: source.items.map((item) => ({ ...item, id: uid(), start: { ...item.start }, end: { ...item.end } })),
+      origin: { ...source.origin },
+      updatedAt: Date.now(),
+    };
+    const next = [duplicate, ...savedLayoutsRef.current];
+    persistLibrary(next, duplicate.id);
+    setActiveLayoutId(duplicate.id);
+    applyLayout(duplicate);
+    setLibraryOpen(false);
+    setSaved(true);
+  };
+
+  const deleteSavedLayout = (id: string) => {
+    const target = savedLayoutsRef.current.find((layout) => layout.id === id);
+    if (!target || !window.confirm(`Delete “${target.projectName}”? This cannot be undone.`)) return;
+    let next = savedLayoutsRef.current.filter((layout) => layout.id !== id);
+    if (!next.length) next = [blankLayout()];
+    const nextActive = id === activeLayoutId ? next[0] : next.find((layout) => layout.id === activeLayoutId) || next[0];
+    persistLibrary(next, nextActive.id);
+    if (id === activeLayoutId) {
+      setActiveLayoutId(nextActive.id);
+      applyLayout(nextActive);
+    }
+    setSaved(true);
+  };
+
+  const printLayout = () => {
+    saveCurrentLayout();
+    setPrinting(true);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      window.print();
+      setPrinting(false);
+    }));
+  };
 
   const clientPoint = (clientX: number, clientY: number): Point => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -566,6 +775,7 @@ export function LayoutPlanner() {
 
   const roomPath = room.map((point) => `${point.x},${point.y}`).join(" ");
   const draftPath = draftRoom.map((point) => `${point.x},${point.y}`).join(" ");
+  const roomCenter = polygonCenter(room);
   const patternX = bounds.minX + origin.x;
   const patternY = bounds.minY + origin.y;
   const pitchX = actualTileW + grout;
@@ -642,10 +852,37 @@ export function LayoutPlanner() {
         </label>
         <div className="header-actions">
           <span className={`save-state ${saved ? "is-saved" : ""}`}>{saved ? <Check size={14} /> : <Save size={14} />}{saved ? "Saved" : "Saving"}</span>
+          <button className="icon-button" onClick={() => { saveCurrentLayout(); setLibraryOpen(true); }} aria-label="Saved layouts" title="Saved layouts"><FolderOpen size={18} /></button>
+          <button className="icon-button" onClick={printLayout} aria-label="Print layout" title="Print layout"><Printer size={18} /></button>
           <button className="icon-button" onClick={undo} disabled={!history.length} aria-label="Undo"><Undo2 size={18} /></button>
           <button className="icon-button" onClick={redo} disabled={!future.length} aria-label="Redo"><Redo2 size={18} /></button>
         </div>
       </header>
+
+      {libraryOpen && <div className="library-backdrop" role="presentation" onPointerDown={() => setLibraryOpen(false)}>
+        <section className="layout-library" role="dialog" aria-modal="true" aria-labelledby="layout-library-title" onPointerDown={(event) => event.stopPropagation()}>
+          <div className="library-heading">
+            <span><span className="eyebrow">Saved work</span><strong id="layout-library-title">Layouts</strong></span>
+            <button className="library-close" onClick={() => setLibraryOpen(false)} aria-label="Close saved layouts"><X size={19} /></button>
+          </div>
+          <label className="library-name-field"><span>Current layout name</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
+          <button className="primary new-layout-button" onClick={createNewLayout}><Plus size={17} /> New layout</button>
+          <div className="layout-list">
+            {[...savedLayouts].sort((a, b) => b.updatedAt - a.updatedAt).map((layout) => <article className={`layout-card ${layout.id === activeLayoutId ? "active" : ""}`} key={layout.id}>
+              <button className="layout-open" onClick={() => openSavedLayout(layout.id)}>
+                <strong>{layout.projectName}</strong>
+                <span>{formatLength(roomBounds(layout.room).maxX - roomBounds(layout.room).minX)} × {formatLength(roomBounds(layout.room).maxY - roomBounds(layout.room).minY)}</span>
+                <small>{layout.id === activeLayoutId ? "Currently editing · " : ""}Saved {new Date(layout.updatedAt).toLocaleString()}</small>
+              </button>
+              <div className="layout-card-actions">
+                <button onClick={() => duplicateSavedLayout(layout.id)} aria-label={`Duplicate ${layout.projectName}`}><Copy size={16} /></button>
+                <button className="danger" onClick={() => deleteSavedLayout(layout.id)} aria-label={`Delete ${layout.projectName}`}><Trash2 size={16} /></button>
+              </div>
+            </article>)}
+          </div>
+          <p className="library-note">Every change is automatically saved on this device. Use Print to create a paper copy or PDF.</p>
+        </section>
+      </div>}
 
       <section className="workspace">
         <nav className="toolrail" aria-label="Drawing tools">
@@ -657,6 +894,15 @@ export function LayoutPlanner() {
         </nav>
 
         <section className="canvas-column">
+          <header className="print-only print-header">
+            <div><span>LAYOUT</span><strong>{projectName}</strong></div>
+            <dl>
+              <div><dt>Room</dt><dd>{formatLength(roomWidth)} × {formatLength(roomHeight)}</dd></div>
+              <div><dt>Tile</dt><dd>{formatLength(tileWidth)} × {formatLength(tileHeight)}</dd></div>
+              <div><dt>Grout</dt><dd>{formatLength(grout)}</dd></div>
+              <div><dt>Floor area</dt><dd>{areaSqFt.toFixed(1)} ft²</dd></div>
+            </dl>
+          </header>
           <div className="canvas-toolbar">
             <div className="mode-copy">
               <strong>{{ select: "Select and adjust", pan: "Move around the plan", floor: "Move the tile field", wall: "Draw a straight wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
@@ -672,7 +918,7 @@ export function LayoutPlanner() {
           </div>
 
           <div className={`canvas-wrap tool-${tool}`}>
-            <svg ref={svgRef} className="drawing-canvas" viewBox={`${pan.x} ${pan.y} ${VIEW_W / zoom} ${VIEW_H / zoom}`}
+            <svg ref={svgRef} className="drawing-canvas" viewBox={printing ? `0 0 ${VIEW_W} ${VIEW_H}` : `${pan.x} ${pan.y} ${VIEW_W / zoom} ${VIEW_H / zoom}`}
               onPointerDownCapture={beginPointerTracking} onPointerMoveCapture={movePointerTracking}
               onPointerUpCapture={endPointerTracking} onPointerCancelCapture={endPointerTracking}
               onPointerDown={startDrawing} onPointerMove={movePointer} onPointerUp={endPointer} onPointerCancel={endPointer}
@@ -699,6 +945,14 @@ export function LayoutPlanner() {
               <rect width="100%" height="100%" fill="url(#major-grid)" />
               <polygon points={roomPath} fill="#fff" stroke="#173f32" strokeWidth="2.25" strokeLinejoin="round" />
               {showTile && <rect x={bounds.minX - actualTileW} y={bounds.minY - actualTileH} width={roomWidth + actualTileW * 2} height={roomHeight + actualTileH * 2} fill="url(#tile-pattern)" clipPath="url(#room-clip)" />}
+              {items.map((item) => { const isSelected = selectedId === item.id; return (
+                <g key={item.id} className={`plan-item ${item.type} ${isSelected ? "selected" : ""}`} onPointerDown={(event) => beginItemDrag(event, item)}>
+                  <line x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} strokeWidth={item.type === "wall" ? item.thickness : Math.max(2.25, item.thickness * .55)} />
+                  {item.type === "opening" && <line className="opening-center" x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} />}
+                  <text x={(item.start.x + item.end.x) / 2} y={(item.start.y + item.end.y) / 2 - item.thickness / 2 - 2}>{formatLength(distance(item.start, item.end))}</text>
+                  {isSelected && <><circle cx={item.start.x} cy={item.start.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "start")} /><circle cx={item.end.x} cy={item.end.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "end")} /></>}
+                </g>
+              ); })}
               {showTile && <g className="chalk-guide" clipPath="url(#room-clip)" pointerEvents="none">
                 <line className="chalk-axis" x1={startX} y1={bounds.minY} x2={startX} y2={bounds.maxY} />
                 <line className="chalk-axis" x1={bounds.minX} y1={startY} x2={bounds.maxX} y2={startY} />
@@ -722,18 +976,10 @@ export function LayoutPlanner() {
                 <g className="chalk-label" transform={`translate(${startX + 12} ${startY - 7})`}><rect x="-10" y="-3" width="20" height="6" rx="2" /><text y="1">CHALK CROSSING</text></g>
               </g>}
               <g className="dimensions" pointerEvents="none">
-                {room.map((point, index) => { const next = room[(index + 1) % room.length]; const midpoint = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }; return (
-                  <g key={`${point.x}-${point.y}-${index}`}><rect x={midpoint.x - 9} y={midpoint.y - 3.4} width="18" height="6.8" rx="2" /><text x={midpoint.x} y={midpoint.y + 1.45}>{formatLength(distance(point, next))}</text></g>
+                {room.map((point, index) => { const next = room[(index + 1) % room.length]; const midpoint = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }; const labelPoint = outsideDimensionPoint(point, next, roomCenter); return (
+                  <g key={`${point.x}-${point.y}-${index}`}><line x1={midpoint.x} y1={midpoint.y} x2={labelPoint.x} y2={labelPoint.y} /><rect x={labelPoint.x - 9} y={labelPoint.y - 3.4} width="18" height="6.8" rx="2" /><text x={labelPoint.x} y={labelPoint.y + 1.45}>{formatLength(distance(point, next))}</text></g>
                 ); })}
               </g>
-              {items.map((item) => { const isSelected = selectedId === item.id; return (
-                <g key={item.id} className={`plan-item ${item.type} ${isSelected ? "selected" : ""}`} onPointerDown={(event) => beginItemDrag(event, item)}>
-                  <line x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} strokeWidth={item.type === "wall" ? item.thickness : Math.max(2.25, item.thickness * .55)} />
-                  {item.type === "opening" && <line className="opening-center" x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} />}
-                  <text x={(item.start.x + item.end.x) / 2} y={(item.start.y + item.end.y) / 2 - item.thickness / 2 - 2}>{formatLength(distance(item.start, item.end))}</text>
-                  {isSelected && <><circle cx={item.start.x} cy={item.start.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "start")} /><circle cx={item.end.x} cy={item.end.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "end")} /></>}
-                </g>
-              ); })}
               {dimensionedWall && guideWallMidpoint && guideWallOrientation === "vertical" && <g className="wall-offset-guides">
                 <line x1={bounds.minX} y1={guideWallMidpoint.y} x2={guideLeftFace} y2={guideWallMidpoint.y} />
                 <line x1={guideRightFace} y1={guideWallMidpoint.y} x2={bounds.maxX} y2={guideWallMidpoint.y} />
@@ -763,6 +1009,11 @@ export function LayoutPlanner() {
             </svg>
             <div className="scale-note">Each small square = 3 inches · Pinch to zoom</div>
           </div>
+          <section className="print-only print-summary">
+            <div><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left / {formatLength(startRightReference)} from right</strong></div>
+            <div><span>Horizontal chalk line</span><strong>{formatLength(startTopReference)} from top / {formatLength(startBottomReference)} from bottom</strong></div>
+            <div><span>Material estimate</span><strong>{tileCount} tiles including {wastePercent}% waste · {mortarBags} × 50 lb mortar bags</strong></div>
+          </section>
         </section>
 
         <aside className="inspector">
