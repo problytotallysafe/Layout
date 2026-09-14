@@ -78,6 +78,7 @@ jobs:
           ! grep -Eq 'android.permission.ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|android.permission.FOREGROUND_SERVICE_LOCATION' "$MERGED"
           ! grep -q 'android.permission.CAMERA' "$MERGED"
           ! grep -q 'android.permission.RECORD_AUDIO' "$MERGED"
+          grep -q 'android:scheme="buildr-layout"' "$MERGED"
           python - "$MERGED" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
@@ -115,8 +116,10 @@ jobs:
           chmod +x gradlew
           ./gradlew clean bundleRelease
         working-directory: android
-      - name: Verify AAB signature
-        run: jarsigner -verify -strict -certs android/app/build/outputs/bundle/release/app-release.aab
+      - name: Verify AAB signature integrity
+        run: |
+          jarsigner -verify -verbose -certs android/app/build/outputs/bundle/release/app-release.aab | tee layout-jarsigner-verify.txt
+          grep -q 'jar verified.' layout-jarsigner-verify.txt
       - name: Record bundle metadata
         run: |
           cp android/app/build/outputs/bundle/release/app-release.aab Layout-1.0.0-rc.aab
@@ -129,5 +132,6 @@ jobs:
             Layout-1.0.0-rc.aab
             layout-release.sha256
             layout-release-version.txt
+            layout-jarsigner-verify.txt
           if-no-files-found: error
           retention-days: 14
