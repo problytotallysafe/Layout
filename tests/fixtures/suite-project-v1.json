@@ -1,0 +1,45 @@
+{
+  "schema": "buildr-suite.project.v1",
+  "schemaVersion": "1.0.0",
+  "source": { "app": "floorplan", "appVersion": "1.0.0", "revision": 3 },
+  "exportedAt": "2026-09-13T18:00:00.000Z",
+  "project": {
+    "id": "suite-fixture-project-1",
+    "organizationId": "suite-fixture-org-1",
+    "buildrProjectId": "suite-fixture-buildr-project-1",
+    "importKey": "buildr:suite-fixture-buildr-project-1",
+    "name": "Suite Fixture Bathroom",
+    "customer": { "name": "Fixture Customer" },
+    "rooms": [
+      {
+        "id": "suite-fixture-room-1",
+        "name": "Bathroom",
+        "displayUnit": "ft-in",
+        "origin": { "x": 0, "y": 0 },
+        "entities": [
+          {
+            "id": "suite-fixture-boundary-1",
+            "kind": "room.boundary",
+            "condition": "proposed",
+            "geometry": { "vertices": [{ "x": 0, "y": 0 }, { "x": 3048, "y": 0 }, { "x": 3048, "y": 2438.4 }, { "x": 0, "y": 2438.4 }] },
+            "metadata": {
+              "variantId": "variant-proposed",
+              "variantName": "Proposed",
+              "areaKind": "Bathroom",
+              "shape": "custom",
+              "wallPhotos": [{ "id": "photo-1", "wallId": "wall-1", "name": "north-wall.jpg", "createdAt": "2026-09-13T17:00:00.000Z", "storagePath": "suite-fixture-org-1/suite-fixture-buildr-project-1/floorplan/photo-1.jpg", "thumbnailPath": "suite-fixture-org-1/suite-fixture-buildr-project-1/floorplan/thumbs/photo-1.jpg", "checksum": "fixture-checksum", "byteSize": 123456, "mimeType": "image/jpeg" }]
+            }
+          },
+          { "id": "wall-1", "kind": "wall.interior", "condition": "proposed", "geometry": { "start": { "x": 1524, "y": 0 }, "end": { "x": 1524, "y": 1219.2 }, "thickness": 114.3 }, "label": "Partition" },
+          { "id": "opening-1", "kind": "object.opening", "condition": "proposed", "geometry": { "x": 762, "y": 0, "width": 914.4, "depth": 114.3, "rotation": 0, "wallId": "wall-1" }, "label": "Door", "metadata": { "type": "door", "confidence": "confirmed" } },
+          { "id": "toilet-1", "kind": "object.toilet", "condition": "proposed", "geometry": { "x": 2438.4, "y": 1828.8, "width": 762, "depth": 533.4, "height": 762, "rotation": 0 }, "label": "Toilet", "metadata": { "type": "toilet", "confidence": "confirmed" } }
+        ],
+        "extensions": { "variantId": "variant-proposed", "variantName": "Proposed", "condition": "proposed", "layout": { "tileWidthMm": 304.8, "tileHeightMm": 609.6, "groutMm": 3.175, "appearance": "transparent", "wastePercent": 10, "originMm": { "x": 152.4, "y": 152.4 }, "rotation": 0, "showTile": true } }
+      }
+    ],
+    "createdAt": "2026-09-13T16:00:00.000Z",
+    "modifiedAt": "2026-09-13T18:00:00.000Z",
+    "extensions": { "fixture": true }
+  },
+  "extensions": { "fixtureVersion": 1 }
+}

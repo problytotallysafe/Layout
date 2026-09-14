@@ -1,14 +1,19 @@
 "use client";
 
 import {
-  BrickWall, Check, ChevronDown, Copy, DoorOpen, FolderOpen, Grid3X3, Hand, MousePointer2, Move,
-  PencilRuler, Plus, Printer, Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Trash2, Undo2, X,
+  Archive, ArchiveRestore, BrickWall, Check, ChevronDown, CloudOff, Copy, DoorOpen, FolderOpen, Grid3X3, Hand, MousePointer2, Move,
+  PencilRuler, Plus, Printer, Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Trash2, Undo2, X, Download, Upload, ExternalLink,
   ZoomIn, ZoomOut,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { decodeSuiteHash, downloadSuite, layoutToSuite, suiteLink, suiteToLayout } from "@/lib/suite-exchange";
+import { mergeLayouts, type LayoutConflict } from "@/lib/layout-sync";
+import { flushCloudDeletions, loadCloudLayouts, pendingCloudDeletions, queueCloudDeletion, saveCloudLayouts } from "@/lib/layout-store";
+import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { SuiteAccountButton } from "@/components/suite-account";
 
-type Point = { x: number; y: number };
-type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
+export type Point = { x: number; y: number };
+export type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
 type Tool = "select" | "pan" | "floor" | "room" | "wall" | "opening";
 type MaterialUnit = "in" | "mm" | "cm";
 type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
@@ -22,7 +27,7 @@ type DragState =
   | null;
 type Snapshot = { room: Point[]; items: DrawItem[] };
 type PinchState = { distance: number; zoom: number; canvasCenter: Point };
-type LayoutData = Snapshot & {
+export type LayoutData = Snapshot & {
   projectName: string;
   tileWidth: number;
   tileHeight: number;
@@ -34,8 +39,11 @@ type LayoutData = Snapshot & {
   origin: Point;
   rotation: 0 | 90;
   showTile: boolean;
+  archivedAt?: number;
+  suiteContext?: { organizationId: string | null; buildrProjectId: string | null; importKey: string };
 };
-type SavedLayout = LayoutData & { id: string; updatedAt: number };
+export type SavedLayout = LayoutData & { id: string; revision: number; updatedAt: number };
+type SyncState = "device" | "saving" | "saved" | "offline" | "failed" | "conflict";
 
 const VIEW_W = 240;
 const VIEW_H = 160;
@@ -45,9 +53,10 @@ const LEGACY_DRAFT_KEY = "layout-draft-v1";
 const DEFAULT_ROOM: Point[] = [
   { x: 48, y: 20 }, { x: 192, y: 20 }, { x: 192, y: 140 }, { x: 48, y: 140 },
 ];
-const uid = () => Math.random().toString(36).slice(2, 9);
+const uid = () => `layout_${crypto.randomUUID()}`;
 const blankLayout = (id = uid(), projectName = "Untitled layout"): SavedLayout => ({
   id,
+  revision: 1,
   updatedAt: Date.now(),
   projectName,
   room: DEFAULT_ROOM.map((point) => ({ ...point })),
@@ -265,14 +274,20 @@ export function LayoutPlanner() {
   const [origin, setOrigin] = useState<Point>({ x: 0, y: 0 });
   const [rotation, setRotation] = useState<0 | 90>(0);
   const [showTile, setShowTile] = useState(true);
+  const [suiteContext, setSuiteContext] = useState<LayoutData["suiteContext"]>();
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [saved, setSaved] = useState(true);
+  const [syncState, setSyncState] = useState<SyncState>("device");
+  const [conflicts, setConflicts] = useState<LayoutConflict[]>([]);
   const [activeLayoutId, setActiveLayoutId] = useState<string | null>(null);
   const [savedLayouts, setSavedLayouts] = useState<SavedLayout[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [cloudHydrated, setCloudHydrated] = useState(false);
+  const [authVersion, setAuthVersion] = useState(0);
   const [printing, setPrinting] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [future, setFuture] = useState<Snapshot[]>([]);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -280,6 +295,17 @@ export function LayoutPlanner() {
   const touchPointsRef = useRef(new Map<number, Point>());
   const pinchRef = useRef<PinchState | null>(null);
   const pinchPointerIdsRef = useRef(new Set<number>());
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const deepLinkHandledRef = useRef(false);
+
+  useEffect(() => {
+    const changed = () => {
+      setCloudHydrated(false);
+      setAuthVersion((value) => value + 1);
+    };
+    window.addEventListener("buildr:auth-change", changed);
+    return () => window.removeEventListener("buildr:auth-change", changed);
+  }, []);
 
   const bounds = useMemo(() => roomBounds(room), [room]);
   const actualTileW = rotation === 0 ? tileWidth : tileHeight;
@@ -361,6 +387,7 @@ export function LayoutPlanner() {
     setOrigin(layout.origin);
     setRotation(layout.rotation);
     setShowTile(layout.showTile);
+    setSuiteContext(layout.suiteContext);
     setSelectedId(null);
     setDraftRoom([]);
     setTool("select");
@@ -379,8 +406,10 @@ export function LayoutPlanner() {
 
   const saveCurrentLayout = useCallback(() => {
     if (!activeLayoutId) return null;
+    const existing = savedLayoutsRef.current.find((layout) => layout.id === activeLayoutId);
     const document: SavedLayout = {
       id: activeLayoutId,
+      revision: (existing?.revision ?? 0) + 1,
       updatedAt: Date.now(),
       projectName: projectName.trim() || "Untitled layout",
       room,
@@ -395,6 +424,7 @@ export function LayoutPlanner() {
       origin,
       rotation,
       showTile,
+      suiteContext,
     };
     const existingIndex = savedLayoutsRef.current.findIndex((layout) => layout.id === activeLayoutId);
     const next = existingIndex >= 0
@@ -404,7 +434,7 @@ export function LayoutPlanner() {
     window.localStorage.setItem(LEGACY_DRAFT_KEY, JSON.stringify(document));
     setSaved(true);
     return document;
-  }, [activeLayoutId, grout, items, materialUnit, origin, persistLibrary, projectName, room, rotation, showTile, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
+  }, [activeLayoutId, grout, items, materialUnit, origin, persistLibrary, projectName, room, rotation, showTile, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -455,16 +485,80 @@ export function LayoutPlanner() {
   }, [applyLayout, persistLibrary]);
 
   useEffect(() => {
-    if (!hydrated || !activeLayoutId) return;
-    const pendingTimer = window.setTimeout(() => setSaved(false), 0);
+    if (!hydrated) return;
+    let cancelled = false;
     const timer = window.setTimeout(() => {
-      saveCurrentLayout();
+      if (!isSupabaseConfigured() || !navigator.onLine) {
+        setSyncState(navigator.onLine ? "device" : "offline");
+        setCloudHydrated(true);
+        return;
+      }
+      setSyncState("saving");
+      void flushCloudDeletions().then(() => loadCloudLayouts()).then((cloudLayouts) => {
+        if (cancelled) return;
+        const pending = new Set(pendingCloudDeletions());
+        const merged = mergeLayouts(savedLayoutsRef.current, cloudLayouts.filter((layout) => !pending.has(layout.id)));
+        const currentId = window.localStorage.getItem(ACTIVE_LAYOUT_KEY) || merged.layouts[0]?.id;
+        const active = merged.layouts.find((layout) => layout.id === currentId) || merged.layouts[0];
+        if (active) {
+          persistLibrary(merged.layouts, active.id);
+          setActiveLayoutId(active.id);
+          applyLayout(active);
+        }
+        setConflicts(merged.conflicts);
+        setSyncState(merged.conflicts.length ? "conflict" : cloudLayouts.length ? "saved" : "device");
+      }).catch(() => {
+        if (!cancelled) setSyncState("failed");
+      }).finally(() => {
+        if (!cancelled) setCloudHydrated(true);
+      });
+    }, 0);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [applyLayout, authVersion, hydrated, persistLibrary]);
+
+  useEffect(() => {
+    if (!hydrated || deepLinkHandledRef.current) return;
+    deepLinkHandledRef.current = true;
+    const shared=decodeSuiteHash(window.location.hash);if(!shared)return;
+    const imported=suiteToLayout(shared);if(!imported.layout){window.alert(imported.error||"The shared room could not be opened.");return}
+    const next=savedLayoutsRef.current.some(item=>item.id===imported.layout!.id)?savedLayoutsRef.current.map(item=>item.id===imported.layout!.id?imported.layout!:item):[imported.layout!,...savedLayoutsRef.current];
+    persistLibrary(next,imported.layout.id);setActiveLayoutId(imported.layout.id);applyLayout(imported.layout);setReadOnly(Boolean(imported.readOnly));window.history.replaceState(null,"",window.location.pathname+window.location.search);if(imported.warning)window.alert(imported.warning);
+  },[applyLayout,hydrated,persistLibrary]);
+
+  useEffect(() => {
+    if (!hydrated || !cloudHydrated || !activeLayoutId) return;
+    const pendingTimer = window.setTimeout(() => setSaved(false), 0);
+    const timer = window.setTimeout(async () => {
+      const document = saveCurrentLayout();
+      if (!document) return;
+      if (!navigator.onLine) { setSyncState("offline"); return; }
+      setSyncState("saving");
+      try {
+        const result = await saveCloudLayouts([document]);
+        setConflicts(result.conflicts);
+        setSyncState(result.conflicts.length ? "conflict" : result.cloudSaved ? "saved" : "device");
+      } catch { setSyncState("failed"); }
     }, 650);
     return () => {
       window.clearTimeout(pendingTimer);
       window.clearTimeout(timer);
     };
-  }, [activeLayoutId, hydrated, saveCurrentLayout]);
+  }, [activeLayoutId, cloudHydrated, hydrated, saveCurrentLayout]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const offline = () => setSyncState("offline");
+    const online = () => {
+      setSyncState("saving");
+      void flushCloudDeletions().then(() => saveCloudLayouts(savedLayoutsRef.current)).then((result) => {
+        setConflicts(result.conflicts);
+        setSyncState(result.conflicts.length ? "conflict" : result.cloudSaved ? "saved" : "device");
+      }).catch(() => setSyncState("failed"));
+    };
+    window.addEventListener("offline", offline);
+    window.addEventListener("online", online);
+    return () => { window.removeEventListener("offline", offline); window.removeEventListener("online", online); };
+  }, [hydrated]);
 
   const createNewLayout = () => {
     saveCurrentLayout();
@@ -495,6 +589,7 @@ export function LayoutPlanner() {
     const duplicate: SavedLayout = {
       ...source,
       id: uid(),
+      revision: 1,
       projectName: `${source.projectName} copy`,
       room: source.room.map((point) => ({ ...point })),
       items: source.items.map((item) => ({ ...item, id: uid(), start: { ...item.start }, end: { ...item.end } })),
@@ -516,11 +611,40 @@ export function LayoutPlanner() {
     if (!next.length) next = [blankLayout()];
     const nextActive = id === activeLayoutId ? next[0] : next.find((layout) => layout.id === activeLayoutId) || next[0];
     persistLibrary(next, nextActive.id);
+    queueCloudDeletion(id);
+    if (navigator.onLine) void flushCloudDeletions().then((complete) => {
+      if (!complete) setSyncState("failed");
+    });
     if (id === activeLayoutId) {
       setActiveLayoutId(nextActive.id);
       applyLayout(nextActive);
     }
     setSaved(true);
+  };
+
+  const toggleArchivedLayout = (id: string) => {
+    saveCurrentLayout();
+    const next = savedLayoutsRef.current.map((layout) => layout.id === id ? {
+      ...layout,
+      archivedAt: layout.archivedAt ? undefined : Date.now(),
+      revision: layout.revision + 1,
+      updatedAt: Date.now(),
+    } : layout);
+    const changed = next.find((layout) => layout.id === id);
+    if (!changed) return;
+    let nextActive = next.find((layout) => layout.id === activeLayoutId && !layout.archivedAt)
+      || next.find((layout) => !layout.archivedAt);
+    if (!nextActive) {
+      nextActive = blankLayout();
+      next.unshift(nextActive);
+    }
+    persistLibrary(next, nextActive.id);
+    setActiveLayoutId(nextActive.id);
+    applyLayout(nextActive);
+    setSaved(true);
+    if (navigator.onLine) void saveCloudLayouts([changed]).then((result) => {
+      setSyncState(result.conflicts.length ? "conflict" : result.cloudSaved ? "saved" : "device");
+    }).catch(() => setSyncState("failed"));
   };
 
   const printLayout = () => {
@@ -530,6 +654,24 @@ export function LayoutPlanner() {
       window.print();
       setPrinting(false);
     }));
+  };
+
+  const exportShared=()=>{const savedLayout=saveCurrentLayout();if(savedLayout)downloadSuite(layoutToSuite(savedLayout),savedLayout.projectName)};
+  const importShared=async(file?:File)=>{if(!file)return;try{const imported=suiteToLayout(JSON.parse(await file.text()));if(!imported.layout)throw new Error(imported.error);const next=savedLayoutsRef.current.some(item=>item.id===imported.layout!.id)?savedLayoutsRef.current.map(item=>item.id===imported.layout!.id?imported.layout!:item):[imported.layout!,...savedLayoutsRef.current];persistLibrary(next,imported.layout.id);setActiveLayoutId(imported.layout.id);applyLayout(imported.layout);setReadOnly(Boolean(imported.readOnly));if(imported.warning)window.alert(imported.warning)}catch(error){window.alert(error instanceof Error?error.message:"This shared file could not be opened.")}};
+  const returnToBuildr=()=>{const savedLayout=saveCurrentLayout();if(!savedLayout)return;const base=process.env.NEXT_PUBLIC_BUILDR_URL||"https://buildr-orcin.vercel.app";const target=savedLayout.suiteContext?.buildrProjectId?`${base.replace(/\/$/,"")}/projects/${savedLayout.suiteContext.buildrProjectId}`:base;window.location.href=suiteLink(target,layoutToSuite(savedLayout))};
+
+  const resolveConflict = (choice: "device" | "cloud") => {
+    const conflict = conflicts[0];
+    if (!conflict) return;
+    const winner = choice === "cloud" ? conflict.cloud : { ...conflict.local, revision: Math.max(conflict.local.revision, conflict.cloud.revision) + 1, updatedAt: Date.now() };
+    const next = savedLayoutsRef.current.map((layout) => layout.id === conflict.id ? winner : layout);
+    persistLibrary(next, activeLayoutId || winner.id);
+    if (activeLayoutId === winner.id) applyLayout(winner);
+    setConflicts((current) => current.slice(1));
+    setSyncState(conflicts.length > 1 ? "conflict" : "saving");
+    if (choice === "device" && navigator.onLine) {
+      void saveCloudLayouts([winner]).then((result) => setSyncState(result.conflicts.length ? "conflict" : "saved")).catch(() => setSyncState("failed"));
+    } else if (conflicts.length <= 1) setSyncState("saved");
   };
 
   const clientPoint = (clientX: number, clientY: number): Point => {
@@ -841,6 +983,7 @@ export function LayoutPlanner() {
 
   return (
     <main className="app-shell">
+      <input ref={importInputRef} hidden type="file" accept=".json,.buildr.json,application/json" onChange={(event)=>{void importShared(event.target.files?.[0]);event.currentTarget.value=""}}/>
       <header className="topbar">
         <div className="brand" aria-label="Layout by Buildr">
           <span className="brand-mark"><PencilRuler size={22} strokeWidth={2.25} /></span>
@@ -851,13 +994,33 @@ export function LayoutPlanner() {
           <ChevronDown size={15} aria-hidden="true" />
         </label>
         <div className="header-actions">
-          <span className={`save-state ${saved ? "is-saved" : ""}`}>{saved ? <Check size={14} /> : <Save size={14} />}{saved ? "Saved" : "Saving"}</span>
+          <span className={`save-state ${saved && syncState === "saved" ? "is-saved" : ""} ${syncState}`}>
+            {syncState === "offline" || syncState === "failed" ? <CloudOff size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
+            {!saved ? "Saving" : { device: "Device saved", saving: "Syncing", saved: "Cloud saved", offline: "Offline · device saved", failed: "Sync failed · device saved", conflict: "Needs review" }[syncState]}
+          </span>
           <button className="icon-button" onClick={() => { saveCurrentLayout(); setLibraryOpen(true); }} aria-label="Saved layouts" title="Saved layouts"><FolderOpen size={18} /></button>
+          <button className="icon-button" onClick={()=>importInputRef.current?.click()} aria-label="Import shared project" title="Import shared project"><Upload size={18}/></button>
+          <button className="icon-button" onClick={exportShared} aria-label="Export shared project" title="Export shared project"><Download size={18}/></button>
+          <button className="icon-button" onClick={returnToBuildr} aria-label="Return result to Buildr" title="Return result to Buildr"><ExternalLink size={18}/></button>
+          <SuiteAccountButton />
           <button className="icon-button" onClick={printLayout} aria-label="Print layout" title="Print layout"><Printer size={18} /></button>
           <button className="icon-button" onClick={undo} disabled={!history.length} aria-label="Undo"><Undo2 size={18} /></button>
           <button className="icon-button" onClick={redo} disabled={!future.length} aria-label="Redo"><Redo2 size={18} /></button>
         </div>
       </header>
+      {readOnly&&<div className="readonly-banner">Created by a newer Buildr app version · view, print, and export only</div>}
+
+      {conflicts[0] && <div className="conflict-backdrop">
+        <section className="conflict-dialog" role="dialog" aria-modal="true" aria-labelledby="layout-conflict-title">
+          <span className="eyebrow">Sync conflict</span>
+          <h2 id="layout-conflict-title">Choose which layout to keep</h2>
+          <p>This layout changed on two devices. Nothing will be overwritten until you choose.</p>
+          <div className="conflict-options">
+            <button onClick={() => resolveConflict("device")}><strong>This device</strong><span>Revision {conflicts[0].local.revision} · {new Date(conflicts[0].local.updatedAt).toLocaleString()}</span></button>
+            <button onClick={() => resolveConflict("cloud")}><strong>Cloud copy</strong><span>Revision {conflicts[0].cloud.revision} · {new Date(conflicts[0].cloud.updatedAt).toLocaleString()}</span></button>
+          </div>
+        </section>
+      </div>}
 
       {libraryOpen && <div className="library-backdrop" role="presentation" onPointerDown={() => setLibraryOpen(false)}>
         <section className="layout-library" role="dialog" aria-modal="true" aria-labelledby="layout-library-title" onPointerDown={(event) => event.stopPropagation()}>
@@ -868,14 +1031,15 @@ export function LayoutPlanner() {
           <label className="library-name-field"><span>Current layout name</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
           <button className="primary new-layout-button" onClick={createNewLayout}><Plus size={17} /> New layout</button>
           <div className="layout-list">
-            {[...savedLayouts].sort((a, b) => b.updatedAt - a.updatedAt).map((layout) => <article className={`layout-card ${layout.id === activeLayoutId ? "active" : ""}`} key={layout.id}>
+            {[...savedLayouts].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt - a.updatedAt).map((layout) => <article className={`layout-card ${layout.id === activeLayoutId ? "active" : ""} ${layout.archivedAt ? "archived" : ""}`} key={layout.id}>
               <button className="layout-open" onClick={() => openSavedLayout(layout.id)}>
                 <strong>{layout.projectName}</strong>
                 <span>{formatLength(roomBounds(layout.room).maxX - roomBounds(layout.room).minX)} × {formatLength(roomBounds(layout.room).maxY - roomBounds(layout.room).minY)}</span>
-                <small>{layout.id === activeLayoutId ? "Currently editing · " : ""}Saved {new Date(layout.updatedAt).toLocaleString()}</small>
+                <small>{layout.archivedAt ? "Archived · " : layout.id === activeLayoutId ? "Currently editing · " : ""}Saved {new Date(layout.updatedAt).toLocaleString()}</small>
               </button>
               <div className="layout-card-actions">
                 <button onClick={() => duplicateSavedLayout(layout.id)} aria-label={`Duplicate ${layout.projectName}`}><Copy size={16} /></button>
+                <button onClick={() => toggleArchivedLayout(layout.id)} aria-label={`${layout.archivedAt ? "Restore" : "Archive"} ${layout.projectName}`}>{layout.archivedAt ? <ArchiveRestore size={16} /> : <Archive size={16} />}</button>
                 <button className="danger" onClick={() => deleteSavedLayout(layout.id)} aria-label={`Delete ${layout.projectName}`}><Trash2 size={16} /></button>
               </div>
             </article>)}
@@ -884,7 +1048,7 @@ export function LayoutPlanner() {
         </section>
       </div>}
 
-      <section className="workspace">
+      <section className={readOnly?"workspace workspace-readonly":"workspace"}>
         <nav className="toolrail" aria-label="Drawing tools">
           {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"] ] as const).map(([value, Icon, label]) => (
             <button key={value} className={tool === value ? "active" : ""} onClick={() => { setTool(value); setDraftRoom([]); setSelectedId(null); }} aria-pressed={tool === value}>
