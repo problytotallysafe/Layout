@@ -22,8 +22,18 @@ jobs:
           java-version: 21
           cache: gradle
       - run: npm ci
-      - run: npm run test:suite
-      - run: npm run android:sync
+      - name: Lint web app
+        run: npm run lint
+      - name: Run suite tests
+        run: npm run test:suite
+      - name: Verify companion-app permissions
+        run: |
+          if grep -Eq 'ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|FOREGROUND_SERVICE_LOCATION' android/app/src/main/AndroidManifest.xml; then
+            echo 'Layout must not request location/background-location permissions.' >&2
+            exit 1
+          fi
+      - name: Build web assets and sync Android
+        run: npm run android:sync
       - name: Restore release keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -38,9 +48,18 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: ./gradlew bundleRelease
         working-directory: android
+      - name: Verify AAB signature
+        run: jarsigner -verify -strict -certs android/app/build/outputs/bundle/release/app-release.aab
+      - name: Record bundle metadata
+        run: |
+          sha256sum android/app/build/outputs/bundle/release/app-release.aab > layout-release.sha256
+          grep -E 'applicationId|versionCode|versionName' android/app/build.gradle > layout-release-version.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: layout-1.0.0-release-aab
-          path: android/app/build/outputs/bundle/release/app-release.aab
+          name: layout-1.0.0-release-candidate
+          path: |
+            android/app/build/outputs/bundle/release/app-release.aab
+            layout-release.sha256
+            layout-release-version.txt
           if-no-files-found: error
           retention-days: 14
