@@ -251,7 +251,7 @@ export function LayoutShell() {
     return () => window.removeEventListener("online", online);
   }, [syncNow]);
 
-  const returnToBuildr = async () => {
+  const returnToBuildr = useCallback(async () => {
     const layout = activeLayout();
     const linked = layout?.suiteContext as ExtendedContext | undefined;
     const projectId = linked?.buildrProjectId;
@@ -266,7 +266,70 @@ export function LayoutShell() {
       return;
     }
     window.location.href = suiteLink(target, layoutToSuite(layout));
-  };
+  }, [syncNow]);
+
+  // LayoutPlanner predates the secure suite reference shell and still exposes a
+  // header return button. Capture that click for linked Buildr drawings so every
+  // visible return path saves the protected revision before navigation. A true
+  // standalone layout keeps LayoutPlanner's portable suite-link behavior.
+  useEffect(() => {
+    const intercept = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const button = target?.closest(
+        'button[aria-label="Return result to Buildr"]',
+      );
+      const layout = activeLayout();
+      const linked = layout?.suiteContext as ExtendedContext | undefined;
+      if (!button || !linked?.buildrProjectId || !linked.suiteDrawingId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      void returnToBuildr();
+    };
+    document.addEventListener("click", intercept, true);
+    return () => document.removeEventListener("click", intercept, true);
+  }, [returnToBuildr]);
+
+  // Printing must not inherit a fixed 240×160 editor viewport. Fit the rendered
+  // SVG content to its actual bounds at print time, preserving one uniform scale
+  // in both axes. This keeps large Floorplan imports from being cropped and keeps
+  // a 10-foot wall visually longer than an 8-foot wall on paper/PDF.
+  useEffect(() => {
+    let previousViewBox: string | null = null;
+    let previousPreserveAspectRatio: string | null = null;
+    const beforePrint = () => {
+      const svg = document.querySelector<SVGSVGElement>("svg.drawing-canvas");
+      if (!svg) return;
+      previousViewBox = svg.getAttribute("viewBox");
+      previousPreserveAspectRatio = svg.getAttribute("preserveAspectRatio");
+      try {
+        const box = svg.getBBox();
+        const span = Math.max(box.width, box.height, 1);
+        const padding = Math.max(6, span * 0.04);
+        svg.setAttribute(
+          "viewBox",
+          `${box.x - padding} ${box.y - padding} ${Math.max(1, box.width + padding * 2)} ${Math.max(1, box.height + padding * 2)}`,
+        );
+        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+      } catch {
+        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+      }
+    };
+    const afterPrint = () => {
+      const svg = document.querySelector<SVGSVGElement>("svg.drawing-canvas");
+      if (!svg) return;
+      if (previousViewBox) svg.setAttribute("viewBox", previousViewBox);
+      if (previousPreserveAspectRatio)
+        svg.setAttribute("preserveAspectRatio", previousPreserveAspectRatio);
+      else svg.removeAttribute("preserveAspectRatio");
+    };
+    window.addEventListener("beforeprint", beforePrint);
+    window.addEventListener("afterprint", afterPrint);
+    return () => {
+      window.removeEventListener("beforeprint", beforePrint);
+      window.removeEventListener("afterprint", afterPrint);
+    };
+  }, []);
 
   const keepCloud = () => {
     if (!conflict?.remoteLayout || conflict.remoteRevision == null) return;
