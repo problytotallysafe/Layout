@@ -112,6 +112,17 @@ export async function publishSuiteSnapshot(
       existing: true,
     };
 
+  const suiteProject = await supabase
+    .from("suite_projects")
+    .select("buildr_project_id")
+    .eq("id", drawing.data.suite_project_id)
+    .eq("organization_id", drawing.data.organization_id)
+    .maybeSingle();
+  if (suiteProject.error) return { ok: false, error: suiteProject.error.message };
+  const buildrProjectId = suiteProject.data?.buildr_project_id;
+  if (!buildrProjectId)
+    return { ok: false, error: "This drawing is not linked to a Buildr project yet." };
+
   let blob: Blob;
   try {
     blob = snapshotBlob(selector);
@@ -124,13 +135,42 @@ export async function publishSuiteSnapshot(
   const hash = await checksum(blob);
   const baseName = safeName(String(drawing.data.title || "layout"));
   const fileName = `${baseName}-layout-r${drawing.data.current_revision}.svg`;
-  const storagePath = `${drawing.data.organization_id}/${drawing.data.suite_project_id}/${drawingId}/exports/${fileName}`;
-  const upload = await supabase.storage.from("suite-files").upload(storagePath, blob, {
+  const storagePath = `${drawing.data.organization_id}/${buildrProjectId}/suite/${drawingId}/${fileName}`;
+  const upload = await supabase.storage.from("project-media").upload(storagePath, blob, {
     contentType: "image/svg+xml",
     cacheControl: "31536000",
     upsert: true,
   });
   if (upload.error) return { ok: false, error: upload.error.message };
+
+  let projectMediaId: string | null = null;
+  const mediaRow = await supabase
+    .from("project_media")
+    .select("id")
+    .eq("organization_id", drawing.data.organization_id)
+    .eq("project_id", buildrProjectId)
+    .eq("storage_path", storagePath)
+    .maybeSingle();
+  if (mediaRow.error) return { ok: false, error: mediaRow.error.message };
+  projectMediaId = mediaRow.data?.id || null;
+  if (!projectMediaId) {
+    const insertedMedia = await supabase
+      .from("project_media")
+      .insert({
+        organization_id: drawing.data.organization_id,
+        project_id: buildrProjectId,
+        storage_path: storagePath,
+        file_name: fileName,
+        category: "document",
+        room_location: drawing.data.title || null,
+        caption: `Layout revision ${drawing.data.current_revision}`,
+        customer_visible: false,
+      })
+      .select("id")
+      .single();
+    if (insertedMedia.error) return { ok: false, error: insertedMedia.error.message };
+    projectMediaId = insertedMedia.data.id;
+  }
 
   const inserted = await supabase
     .from("suite_exports")
@@ -140,6 +180,7 @@ export async function publishSuiteSnapshot(
       room_id: drawing.data.room_id,
       source_drawing_id: drawingId,
       source_revision: drawing.data.current_revision,
+      project_media_id: projectMediaId,
       export_type: "image",
       storage_path: storagePath,
       file_name: fileName,
