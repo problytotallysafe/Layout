@@ -1,5 +1,5 @@
-import { LayoutPlanner } from "@/components/layout-planner";
+import { LayoutShell } from "@/components/layout-shell";
 
 export default function Home() {
-  return <LayoutPlanner />;
+  return <LayoutShell />;
 }
