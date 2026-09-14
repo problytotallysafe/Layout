@@ -143,12 +143,13 @@ export function LayoutShell() {
   const refresh = useCallback(() => setCurrent(activeLayout()), []);
 
   useEffect(() => {
-    refresh();
+    const initial = window.setTimeout(refresh, 0);
     const timer = window.setInterval(refresh, 900);
     const authChanged = () => setPlannerKey((value) => value + 1);
     window.addEventListener("buildr:auth-change", authChanged);
     window.addEventListener("storage", refresh);
     return () => {
+      window.clearTimeout(initial);
       window.clearInterval(timer);
       window.removeEventListener("buildr:auth-change", authChanged);
       window.removeEventListener("storage", refresh);
