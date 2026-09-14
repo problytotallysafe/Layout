@@ -7,8 +7,8 @@ import {
   type SuiteEntity,
   type SuiteProject,
   type SuiteRoom,
-} from "@/lib/suite-contract";
-import type { DrawItem, Point, SavedLayout } from "@/components/layout-planner";
+} from "./suite-contract";
+import type { DrawItem, Point, SavedLayout } from "../components/layout-planner";
 
 type SuiteContext = {
   organizationId: string | null;
