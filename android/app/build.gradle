@@ -43,7 +43,7 @@ android {
     }
 }
 
-tasks.register('verifyReleaseSigning') {
+def verifyReleaseSigningTask = tasks.register('verifyReleaseSigning') {
     doLast {
         if (!hasReleaseSigning) {
             throw new GradleException('Release signing is not configured. Set ANDROID_KEYSTORE_FILE, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD.')
@@ -51,8 +51,13 @@ tasks.register('verifyReleaseSigning') {
     }
 }
 
-tasks.named('bundleRelease').configure {
-    dependsOn tasks.named('verifyReleaseSigning')
+// Android Gradle Plugin creates bundleRelease after this build file is evaluated.
+// configureEach safely wires both existing and future matching tasks without making
+// non-signing tasks such as processReleaseMainManifest fail during RC validation.
+tasks.configureEach { task ->
+    if (task.name == 'bundleRelease') {
+        task.dependsOn verifyReleaseSigningTask
+    }
 }
 
 repositories {
