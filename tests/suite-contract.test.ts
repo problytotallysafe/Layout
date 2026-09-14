@@ -22,6 +22,13 @@ test("measurement conversion is reversible to shared precision", () => {
   assert.equal(mmToInches(inchesToMm(101.125)), 101.125);
 });
 
+test("valid suite data is accepted", () => {
+  assert.equal(
+    parseSuiteProject(createSuiteEnvelope(project, "layout", "1.0.0")).ok,
+    true,
+  );
+});
+
 test("newer shared records open safely read-only", () => {
   const envelope = createSuiteEnvelope(project, "floorplan", "2.0.0");
   envelope.schemaVersion = "2.0.0";
@@ -33,4 +40,27 @@ test("newer shared records open safely read-only", () => {
 test("invalid shared data is rejected without throwing", () => {
   assert.equal(parseSuiteProject(null).ok, false);
   assert.equal(parseSuiteProject({ schemaVersion: "bad" }).ok, false);
+});
+
+test("malformed drawing items are rejected before Layout conversion", () => {
+  const envelope = createSuiteEnvelope(
+    {
+      ...project,
+      rooms: [
+        {
+          id: "room_1",
+          name: "Bath",
+          displayUnit: "ft-in",
+          origin: { x: 0, y: 0 },
+          entities: [
+            { id: "wall_1", kind: "wall.interior", geometry: {} },
+          ],
+        },
+      ],
+    },
+    "floorplan",
+    "1.0.0",
+  );
+  (envelope.project.rooms[0].entities[0] as unknown as { geometry: unknown }).geometry = null;
+  assert.equal(parseSuiteProject(envelope).ok, false);
 });
