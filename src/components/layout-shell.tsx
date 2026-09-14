@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LayoutPlanner, type SavedLayout } from "@/components/layout-planner";
+import { layoutToSuite, suiteLink } from "@/lib/suite-exchange";
 import {
   loadSuiteDrawingReference,
   saveSuiteDrawingReference,
@@ -22,6 +23,9 @@ type SyncMarks = Record<string, SyncMark>;
 type Conflict = Extract<SuiteReferenceSave, { ok: false }> & {
   drawingId: string;
   localLayout: SavedLayout;
+};
+type NativeWindow = Window & {
+  Capacitor?: { isNativePlatform?: () => boolean };
 };
 
 function layouts(): SavedLayout[] {
@@ -93,6 +97,20 @@ function writeMark(drawingId: string, mark: SyncMark) {
   const next = marks();
   next[drawingId] = mark;
   localStorage.setItem(SYNC_KEY, JSON.stringify(next));
+}
+
+function openBuildrProject(projectId: string, webTarget: string) {
+  const native = Boolean(
+    (window as NativeWindow).Capacitor?.isNativePlatform?.(),
+  );
+  if (!native) {
+    window.location.href = webTarget;
+    return;
+  }
+  window.location.href = `buildr://project/${encodeURIComponent(projectId)}`;
+  window.setTimeout(() => {
+    if (document.visibilityState === "visible") window.location.href = webTarget;
+  }, 900);
 }
 
 const overlayStyle = {
@@ -232,6 +250,23 @@ export function LayoutShell() {
     return () => window.removeEventListener("online", online);
   }, [syncNow]);
 
+  const returnToBuildr = async () => {
+    const layout = activeLayout();
+    const linked = layout?.suiteContext as ExtendedContext | undefined;
+    const projectId = linked?.buildrProjectId;
+    if (!layout || !projectId) return;
+    const base =
+      process.env.NEXT_PUBLIC_BUILDR_URL || "https://buildr-orcin.vercel.app";
+    const target = `${base.replace(/\/$/, "")}/projects/${encodeURIComponent(projectId)}`;
+    if (linked?.suiteDrawingId) {
+      const synced = await syncNow(layout, undefined, true);
+      if (!synced) return;
+      openBuildrProject(projectId, target);
+      return;
+    }
+    window.location.href = suiteLink(target, layoutToSuite(layout));
+  };
+
   const keepCloud = () => {
     if (!conflict?.remoteLayout || conflict.remoteRevision == null) return;
     writeLayout(conflict.remoteLayout);
@@ -258,23 +293,40 @@ export function LayoutShell() {
   return (
     <>
       <LayoutPlanner key={plannerKey} />
-      {message && (
+      {(message || context?.buildrProjectId) && (
         <div
           style={{
             position: "fixed",
             right: 12,
             bottom: 12,
             zIndex: 800,
-            maxWidth: 320,
-            padding: "8px 12px",
-            borderRadius: 999,
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            maxWidth: "calc(100vw - 24px)",
+            padding: "6px",
+            borderRadius: 14,
             background: "rgba(24,61,50,.94)",
             color: "white",
             fontSize: 12,
             boxShadow: "0 8px 24px rgba(0,0,0,.2)",
           }}
         >
-          {saving ? "Syncing to Buildr…" : message}
+          {message && (
+            <span style={{ padding: "0 6px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {saving ? "Syncing to Buildr…" : message}
+            </span>
+          )}
+          {context?.buildrProjectId && (
+            <button
+              type="button"
+              onClick={() => void returnToBuildr()}
+              disabled={saving}
+              style={{ whiteSpace: "nowrap" }}
+            >
+              Return to Buildr
+            </button>
+          )}
         </div>
       )}
       {conflict && (
@@ -305,6 +357,11 @@ export function LayoutShell() {
               keeping the original record intact and editing is disabled until
               this app is updated.
             </p>
+            {context?.buildrProjectId && (
+              <button type="button" onClick={() => void returnToBuildr()}>
+                Return to Buildr
+              </button>
+            )}
           </section>
         </div>
       )}
