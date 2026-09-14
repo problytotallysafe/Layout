@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LayoutPlanner, type SavedLayout } from "@/components/layout-planner";
+import {
+  resolveBuildrReturnTarget,
+  type BuildrReturnTarget,
+} from "@/lib/buildr-return";
 import { publishSuiteSnapshot } from "@/lib/suite-export";
 import { layoutToSuite, suiteLink } from "@/lib/suite-exchange";
 import {
@@ -18,6 +22,7 @@ type ExtendedContext = NonNullable<SavedLayout["suiteContext"]> & {
   suiteDrawingId?: string;
   suiteDrawingRevision?: number;
   readOnly?: boolean;
+  sourceEnvelope?: unknown;
 };
 type SyncMark = { remoteRevision: number; localSignature: string };
 type SyncMarks = Record<string, SyncMark>;
@@ -100,7 +105,7 @@ function writeMark(drawingId: string, mark: SyncMark) {
   localStorage.setItem(SYNC_KEY, JSON.stringify(next));
 }
 
-function openBuildrProject(projectId: string, webTarget: string) {
+function openBuildrTarget(target: BuildrReturnTarget, webTarget: string) {
   const native = Boolean(
     (window as NativeWindow).Capacitor?.isNativePlatform?.(),
   );
@@ -108,7 +113,10 @@ function openBuildrProject(projectId: string, webTarget: string) {
     window.location.href = webTarget;
     return;
   }
-  window.location.href = `buildr://project/${encodeURIComponent(projectId)}`;
+  window.location.href =
+    target.kind === "project"
+      ? `buildr://project/${encodeURIComponent(target.id)}`
+      : `buildr://context/${encodeURIComponent(target.type)}/${encodeURIComponent(target.id)}`;
   window.setTimeout(() => {
     if (document.visibilityState === "visible") window.location.href = webTarget;
   }, 900);
@@ -193,6 +201,9 @@ export function LayoutShell() {
 
   const context = current?.suiteContext as ExtendedContext | undefined;
   const readOnly = Boolean(context?.readOnly);
+  const hasBuildrReturn = Boolean(
+    context?.suiteDrawingId || context?.buildrProjectId || context?.sourceEnvelope,
+  );
 
   const syncNow = useCallback(
     async (layout: SavedLayout, expectedOverride?: number, force = false) => {
@@ -254,29 +265,41 @@ export function LayoutShell() {
 
   const returnToBuildr = useCallback(async () => {
     const layout = activeLayout();
-    const linked = layout?.suiteContext as ExtendedContext | undefined;
-    const projectId = linked?.buildrProjectId;
-    if (!layout || !projectId) return;
+    if (!layout) return;
+    const linked = layout.suiteContext as ExtendedContext | undefined;
+    const buildrTarget = await resolveBuildrReturnTarget(layout);
+    if (!buildrTarget) {
+      setMessage("This layout is not linked to a Buildr record yet.");
+      return;
+    }
     const base =
       process.env.NEXT_PUBLIC_BUILDR_URL || "https://buildr-orcin.vercel.app";
-    const target = `${base.replace(/\/$/, "")}/projects/${encodeURIComponent(projectId)}`;
+    const webTarget = `${base.replace(/\/$/, "")}${buildrTarget.path}`;
     if (linked?.suiteDrawingId) {
       const synced = await syncNow(layout, undefined, true);
       if (!synced) return;
-      const snapshot = await publishSuiteSnapshot(linked.suiteDrawingId);
-      if (!snapshot.ok) {
-        setMessage(`Drawing synced, but the revision snapshot was not attached: ${snapshot.error}`);
-        return;
+      if (buildrTarget.kind === "project") {
+        const snapshot = await publishSuiteSnapshot(linked.suiteDrawingId);
+        if (!snapshot.ok) {
+          setMessage(`Drawing synced, but the revision snapshot was not attached: ${snapshot.error}`);
+          return;
+        }
+        setMessage(
+          snapshot.existing
+            ? "Synced · revision snapshot already attached"
+            : "Synced · revision snapshot attached to Buildr",
+        );
+      } else {
+        setMessage("Synced to Buildr planning workspace");
       }
-      setMessage(
-        snapshot.existing
-          ? "Synced · revision snapshot already attached"
-          : "Synced · revision snapshot attached to Buildr",
-      );
-      openBuildrProject(projectId, target);
+      openBuildrTarget(buildrTarget, webTarget);
       return;
     }
-    window.location.href = suiteLink(target, layoutToSuite(layout));
+    if (buildrTarget.kind === "project") {
+      window.location.href = suiteLink(webTarget, layoutToSuite(layout));
+      return;
+    }
+    window.location.href = webTarget;
   }, [syncNow]);
 
   useEffect(() => {
@@ -287,7 +310,7 @@ export function LayoutShell() {
       );
       const layout = activeLayout();
       const linked = layout?.suiteContext as ExtendedContext | undefined;
-      if (!button || !linked?.buildrProjectId || !linked.suiteDrawingId) return;
+      if (!button || !linked?.suiteDrawingId) return;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -360,7 +383,7 @@ export function LayoutShell() {
   return (
     <>
       <LayoutPlanner key={plannerKey} />
-      {(message || context?.buildrProjectId) && (
+      {(message || hasBuildrReturn) && (
         <div
           style={{
             position: "fixed",
@@ -384,7 +407,7 @@ export function LayoutShell() {
               {saving ? "Syncing to Buildr…" : message}
             </span>
           )}
-          {context?.buildrProjectId && (
+          {hasBuildrReturn && (
             <button
               type="button"
               onClick={() => void returnToBuildr()}
@@ -424,7 +447,7 @@ export function LayoutShell() {
               keeping the original record intact and editing is disabled until
               this app is updated.
             </p>
-            {context?.buildrProjectId && (
+            {hasBuildrReturn && (
               <button type="button" onClick={() => void returnToBuildr()}>
                 Return to Buildr
               </button>
