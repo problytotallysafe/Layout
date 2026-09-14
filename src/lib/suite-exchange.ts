@@ -7,7 +7,7 @@ import {
   type SuiteEntity,
   type SuiteProject,
   type SuiteRoom,
-} from "./suite-contract";
+} from "./suite-contract.ts";
 import type { DrawItem, Point, SavedLayout } from "../components/layout-planner";
 
 type SuiteContext = {
