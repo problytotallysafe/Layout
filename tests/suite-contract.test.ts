@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import {
   createSuiteEnvelope,
   inchesToMm,
@@ -7,6 +8,7 @@ import {
   parseSuiteProject,
   type SuiteProject,
 } from "../src/lib/suite-contract.ts";
+import { layoutToSuite, suiteToLayout } from "../src/lib/suite-exchange.ts";
 
 const project: SuiteProject = {
   id: "project_1",
@@ -18,6 +20,8 @@ const project: SuiteProject = {
   modifiedAt: "2026-09-13T00:00:00Z",
 };
 
+const fixture = new URL("./fixtures/suite-project-v1.json", import.meta.url);
+
 test("measurement conversion is reversible to shared precision", () => {
   assert.equal(mmToInches(inchesToMm(101.125)), 101.125);
 });
@@ -25,6 +29,32 @@ test("measurement conversion is reversible to shared precision", () => {
 test("valid suite data is accepted", () => {
   assert.equal(
     parseSuiteProject(createSuiteEnvelope(project, "layout", "1.0.0")).ok,
+    true,
+  );
+});
+
+test("canonical fixture converts through Layout and preserves unsupported Floorplan entities", async () => {
+  const input = JSON.parse(await readFile(fixture, "utf8"));
+  const imported = suiteToLayout(input);
+  assert.equal(imported.error, undefined);
+  assert.ok(imported.layout);
+  if (!imported.layout) return;
+
+  assert.equal(imported.layout.suiteContext?.buildrProjectId, "suite-fixture-buildr-project-1");
+  assert.equal(imported.layout.items.some((item) => item.id === "wall-1"), true);
+  assert.equal(imported.layout.items.some((item) => item.id === "opening-1"), true);
+
+  const exported = layoutToSuite(
+    imported.layout,
+    "suite-fixture-org-1",
+    "suite-fixture-buildr-project-1",
+  );
+  const parsed = parseSuiteProject(exported);
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.value.project.buildrProjectId, "suite-fixture-buildr-project-1");
+  assert.equal(
+    parsed.value.project.rooms[0].entities.some((entity) => entity.id === "toilet-1" && entity.kind === "object.toilet"),
     true,
   );
 });
