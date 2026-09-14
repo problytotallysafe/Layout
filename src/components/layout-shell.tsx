@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LayoutPlanner, type SavedLayout } from "@/components/layout-planner";
+import { publishSuiteSnapshot } from "@/lib/suite-export";
 import { layoutToSuite, suiteLink } from "@/lib/suite-exchange";
 import {
   loadSuiteDrawingReference,
@@ -262,16 +263,22 @@ export function LayoutShell() {
     if (linked?.suiteDrawingId) {
       const synced = await syncNow(layout, undefined, true);
       if (!synced) return;
+      const snapshot = await publishSuiteSnapshot(linked.suiteDrawingId);
+      if (!snapshot.ok) {
+        setMessage(`Drawing synced, but the revision snapshot was not attached: ${snapshot.error}`);
+        return;
+      }
+      setMessage(
+        snapshot.existing
+          ? "Synced · revision snapshot already attached"
+          : "Synced · revision snapshot attached to Buildr",
+      );
       openBuildrProject(projectId, target);
       return;
     }
     window.location.href = suiteLink(target, layoutToSuite(layout));
   }, [syncNow]);
 
-  // LayoutPlanner predates the secure suite reference shell and still exposes a
-  // header return button. Capture that click for linked Buildr drawings so every
-  // visible return path saves the protected revision before navigation. A true
-  // standalone layout keeps LayoutPlanner's portable suite-link behavior.
   useEffect(() => {
     const intercept = (event: MouseEvent) => {
       const target = event.target instanceof Element ? event.target : null;
@@ -290,10 +297,6 @@ export function LayoutShell() {
     return () => document.removeEventListener("click", intercept, true);
   }, [returnToBuildr]);
 
-  // Printing must not inherit a fixed 240×160 editor viewport. Fit the rendered
-  // SVG content to its actual bounds at print time, preserving one uniform scale
-  // in both axes. This keeps large Floorplan imports from being cropped and keeps
-  // a 10-foot wall visually longer than an 8-foot wall on paper/PDF.
   useEffect(() => {
     let previousViewBox: string | null = null;
     let previousPreserveAspectRatio: string | null = null;
