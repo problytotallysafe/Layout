@@ -64,6 +64,7 @@ export type LayoutData = Snapshot & {
   rotation: 0 | 90;
   showTile: boolean;
   snapEnabled: boolean;
+  notes?: string;
   archivedAt?: number;
   suiteContext?: { organizationId: string | null; buildrProjectId: string | null; importKey: string };
 };
@@ -98,6 +99,7 @@ const blankLayout = (id = uid(), projectName = "Untitled layout"): SavedLayout =
   rotation: 0,
   showTile: true,
   snapEnabled: true,
+  notes: "",
 });
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const distance = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
@@ -331,6 +333,7 @@ export function LayoutPlanner() {
   const [rotation, setRotation] = useState<0 | 90>(0);
   const [showTile, setShowTile] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
+  const [notes, setNotes] = useState("");
   const [suiteContext, setSuiteContext] = useState<LayoutData["suiteContext"]>();
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
@@ -496,6 +499,7 @@ export function LayoutPlanner() {
     setRotation(layout.rotation);
     setShowTile(layout.showTile);
     setSnapEnabled(layout.snapEnabled !== false);
+    setNotes(layout.notes || "");
     setSuiteContext(layout.suiteContext);
     setSelectedId(null);
     setDraftRoom([]);
@@ -535,6 +539,7 @@ export function LayoutPlanner() {
       rotation,
       showTile,
       snapEnabled,
+      notes,
       suiteContext,
     };
     const existingIndex = savedLayoutsRef.current.findIndex((layout) => layout.id === activeLayoutId);
@@ -545,7 +550,7 @@ export function LayoutPlanner() {
     window.localStorage.setItem(LEGACY_DRAFT_KEY, JSON.stringify(document));
     setSaved(true);
     return document;
-  }, [activeLayoutId, grout, items, materialUnit, origin, pattern, persistLibrary, projectName, room, rotation, showTile, snapEnabled, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
+  }, [activeLayoutId, grout, items, materialUnit, notes, origin, pattern, persistLibrary, projectName, room, rotation, showTile, snapEnabled, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1358,9 +1363,10 @@ export function LayoutPlanner() {
             <div className="scale-note">Each small square = 3 inches · Pinch to zoom</div>
           </div>
           <section className="print-only print-summary">
-            <div><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left / {formatLength(startRightReference)} from right</strong></div>
-            <div><span>Horizontal chalk line</span><strong>{formatLength(startTopReference)} from top / {formatLength(startBottomReference)} from bottom</strong></div>
-            <div><span>Material estimate</span><strong>{tileCount} tiles including {wastePercent}% waste · {mortarBags} × 50 lb mortar bags</strong></div>
+            <div><span>Vertical reference</span><strong>{formatLength(startLeftReference)} from left / {formatLength(startRightReference)} from right</strong></div>
+            <div><span>Horizontal reference</span><strong>{formatLength(startTopReference)} from top / {formatLength(startBottomReference)} from bottom</strong></div>
+            <div><span>Material estimate</span><strong>{tileCount} pieces including {wastePercent}% waste · {mortarBags} × 50 lb mortar bags</strong></div>
+            {notes.trim() && <div className="print-notes"><span>Install notes</span><strong>{notes.trim()}</strong></div>}
           </section>
         </section>
 
@@ -1429,6 +1435,17 @@ export function LayoutPlanner() {
             <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest planned cut</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
             <div className="start-reference-card"><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left · {formatLength(startRightReference)} from right</strong><span>Horizontal chalk line</span><strong>{formatLength(startTopReference)} from top · {formatLength(startBottomReference)} from bottom</strong></div>
             <p>{cutWarning ? "A room edge, wall face, wall end, or opening may create a cut below half a tile. Use Optimize cuts, drag the floor, or nudge it precisely." : "The current tile position avoids small cuts across the room edges, walls, and openings being checked."}</p>
+          </section>
+
+          <section className="panel notes-panel">
+            <div className="panel-heading"><span className="eyebrow">Install notes</span><strong>Field notes</strong></div>
+            <textarea
+              aria-label="Installation notes"
+              value={notes}
+              maxLength={1200}
+              placeholder="Center doorway, keep a full tile at vanity, verify cabinet location…"
+              onChange={(event) => setNotes(event.target.value)}
+            />
           </section>
 
           <section className="panel install-panel">
