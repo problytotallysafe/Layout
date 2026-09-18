@@ -20,7 +20,7 @@ import {
   snapToCommonAngle,
 } from "@/lib/layout-geometry";
 import {
-  assessAxis,
+  assessObstacleCuts,
   assessPolygonLayout,
   optimizePolygonLayout,
   type CutObstacle,
@@ -409,12 +409,6 @@ export function LayoutPlanner() {
     const addBoth = (target: CutObstacle[], coordinate: number) => {
       target.push({ coordinate, side: "before" }, { coordinate, side: "after" });
     };
-    room.forEach((point) => {
-      const x = point.x - bounds.minX;
-      const y = point.y - bounds.minY;
-      if (x > 0 && x < roomWidth) addBoth(nextX, x);
-      if (y > 0 && y < roomHeight) addBoth(nextY, y);
-    });
     items.forEach((item) => {
       const horizontal = Math.abs(item.end.x - item.start.x) >= Math.abs(item.end.y - item.start.y);
       if (item.type === "wall") {
@@ -447,9 +441,15 @@ export function LayoutPlanner() {
       xObstacles: nextX.filter(({ coordinate }) => coordinate > 0 && coordinate < roomWidth),
       yObstacles: nextY.filter(({ coordinate }) => coordinate > 0 && coordinate < roomHeight),
     };
-  }, [items, room, bounds.minX, bounds.minY, roomWidth, roomHeight]);
-  const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX), [roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX]);
-  const currentYCuts = useMemo(() => assessAxis(roomHeight, actualTileH, grout, origin.y, yObstacles), [roomHeight, actualTileH, grout, origin.y, yObstacles]);
+  }, [items, bounds.minX, bounds.minY, roomWidth, roomHeight]);
+  const currentXObstacleCut = useMemo(
+    () => assessObstacleCuts(actualTileW, grout, origin.x, xObstacles, patternPhasesX),
+    [actualTileW, grout, origin.x, patternPhasesX, xObstacles],
+  );
+  const currentYObstacleCut = useMemo(
+    () => assessObstacleCuts(actualTileH, grout, origin.y, yObstacles),
+    [actualTileH, grout, origin.y, yObstacles],
+  );
   const currentPolygonCuts = useMemo(
     () => assessPolygonLayout(
       room,
@@ -467,8 +467,8 @@ export function LayoutPlanner() {
   const selectedEdgeEnd = selectedRoomEdge == null ? null : room[(selectedRoomEdge + 1) % room.length] ?? null;
   const dimensionedWall = tool === "select" && selected?.type === "wall" ? selected : null;
   const minimumCut = Math.min(
-    currentXCuts.minimum,
-    currentYCuts.minimum,
+    currentXObstacleCut,
+    currentYObstacleCut,
     currentPolygonCuts.minimumBoundaryCut,
   );
   const cutWarning = minimumCut < Math.min(actualTileW, actualTileH) / 2;
