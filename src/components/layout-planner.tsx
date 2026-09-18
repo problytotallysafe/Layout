@@ -71,6 +71,7 @@ type Snapshot = {
 type PinchState = { distance: number; zoom: number; canvasCenter: Point };
 export type LayoutData = Snapshot & {
   projectName: string;
+  roomName?: string;
   tileWidth: number;
   tileHeight: number;
   grout: number;
@@ -103,6 +104,7 @@ const blankLayout = (id = uid(), projectName = "Untitled layout"): SavedLayout =
   revision: 1,
   updatedAt: Date.now(),
   projectName,
+  roomName: "Room 1",
   room: DEFAULT_ROOM.map((point) => ({ ...point })),
   items: [],
   tileWidth: 12,
@@ -316,7 +318,8 @@ function mortarRecommendation(tileWidth: number, tileHeight: number) {
 }
 
 export function LayoutPlanner() {
-  const [projectName, setProjectName] = useState("Untitled bathroom");
+  const [projectName, setProjectName] = useState("Untitled layout");
+  const [roomName, setRoomName] = useState("Room 1");
   const [room, setRoom] = useState<Point[]>(DEFAULT_ROOM);
   const [draftRoom, setDraftRoom] = useState<Point[]>([]);
   const [items, setItems] = useState<DrawItem[]>([
@@ -502,6 +505,7 @@ export function LayoutPlanner() {
 
   const applyLayout = useCallback((layout: SavedLayout) => {
     setProjectName(layout.projectName);
+    setRoomName(layout.roomName || "Room 1");
     setRoom(layout.room);
     setItems(reconcileItemsWithRoom(layout.items, layout.room));
     setTileWidth(layout.tileWidth);
@@ -552,6 +556,7 @@ export function LayoutPlanner() {
       revision: (existing?.revision ?? 0) + 1,
       updatedAt: Date.now(),
       projectName: projectName.trim() || "Untitled layout",
+      roomName: roomName.trim() || "Room 1",
       room,
       items,
       tileWidth,
@@ -582,7 +587,7 @@ export function LayoutPlanner() {
     }
     setSaved(true);
     return document;
-  }, [activeLayoutId, grout, items, materialType, materialUnit, notes, origin, pattern, persistLibrary, projectName, room, rotation, showTile, snapEnabled, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
+  }, [activeLayoutId, grout, items, materialType, materialUnit, notes, origin, pattern, persistLibrary, projectName, room, roomName, rotation, showTile, snapEnabled, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1433,7 +1438,10 @@ export function LayoutPlanner() {
             <span><span className="eyebrow">Saved work</span><strong id="layout-library-title">Layouts</strong></span>
             <button className="library-close" onClick={() => setLibraryOpen(false)} aria-label="Close saved layouts"><X size={19} /></button>
           </div>
-          <label className="library-name-field"><span>Current layout name</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
+          <div className="library-meta-fields">
+            <label className="library-name-field"><span>Layout / project name</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
+            <label className="library-name-field"><span>Room / area</span><input value={roomName} onChange={(event) => setRoomName(event.target.value)} /></label>
+          </div>
           <button className="primary new-layout-button" onClick={createNewLayout}><Plus size={17} /> New layout</button>
           <div className="library-utility-actions" aria-label="Layout actions">
             <button onClick={() => importInputRef.current?.click()}><Upload size={16} /> Import</button>
@@ -1445,8 +1453,8 @@ export function LayoutPlanner() {
             {[...savedLayouts].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt - a.updatedAt).map((layout) => <article className={`layout-card ${layout.id === activeLayoutId ? "active" : ""} ${layout.archivedAt ? "archived" : ""}`} key={layout.id}>
               <button className="layout-open" onClick={() => openSavedLayout(layout.id)}>
                 <strong>{layout.projectName}</strong>
-                <span>{formatLength(roomBounds(layout.room).maxX - roomBounds(layout.room).minX)} × {formatLength(roomBounds(layout.room).maxY - roomBounds(layout.room).minY)}</span>
-                <small>{layout.archivedAt ? "Archived · " : layout.id === activeLayoutId ? "Currently editing · " : ""}Saved {new Date(layout.updatedAt).toLocaleString()}</small>
+                <span>{layout.roomName || "Room"} · {formatLength(roomBounds(layout.room).maxX - roomBounds(layout.room).minX)} × {formatLength(roomBounds(layout.room).maxY - roomBounds(layout.room).minY)}</span>
+                <small>{layout.archivedAt ? "Archived · " : layout.id === activeLayoutId ? "Currently editing · " : ""}{layout.suiteContext?.buildrProjectId ? "Buildr linked · " : ""}Saved {new Date(layout.updatedAt).toLocaleString()}</small>
               </button>
               <div className="layout-card-actions">
                 <button onClick={() => duplicateSavedLayout(layout.id)} aria-label={`Duplicate ${layout.projectName}`}><Copy size={16} /></button>
@@ -1470,7 +1478,7 @@ export function LayoutPlanner() {
 
         <section className="canvas-column">
           <header className="print-only print-header">
-            <div><span>LAYOUT</span><strong>{projectName}</strong></div>
+            <div><span>LAYOUT</span><strong>{projectName}</strong><small>{roomName}</small></div>
             <dl>
               <div><dt>Room</dt><dd>{formatLength(roomWidth)} × {formatLength(roomHeight)}</dd></div>
               <div><dt>Material</dt><dd>{materialType === "tile" ? "Tile" : "Plank"} · {formatLength(tileWidth)} × {formatLength(tileHeight)}</dd></div>
