@@ -188,7 +188,7 @@ export function layoutToSuite(
 
   const room: SuiteRoom = {
     id: sourceRoom?.id || context?.sourceRoomId || `room_${layout.id}`,
-    name: sourceRoom?.name || layout.roomName || layout.projectName,
+    name: layout.roomName || sourceRoom?.name || layout.projectName,
     displayUnit: sourceRoom?.displayUnit || "ft-in",
     origin: sourceRoom?.origin || { x: 0, y: 0 },
     entities: [
