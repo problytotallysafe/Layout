@@ -209,15 +209,15 @@ const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, i
   return point.x === next.x || point.y === next.y;
 });
 
-function NumberField({ label, value, onChange, suffix, min = 0, step = 1 }: {
-  label: string; value: number; onChange: (value: number) => void; suffix: string; min?: number; step?: number;
+function NumberField({ label, value, onChange, suffix, min = 0, step = 1, disabled = false }: {
+  label: string; value: number; onChange: (value: number) => void; suffix: string; min?: number; step?: number; disabled?: boolean;
 }) {
   return (
     <label className="field">
       <span>{label}</span>
       <span className="number-input">
-        <input aria-label={label} min={min} step={step} type="number" value={Number.isInteger(value) ? value : Number(value.toFixed(3))}
-          onChange={(event) => onChange(Math.max(min, Number(event.target.value) || 0))} />
+        <input aria-label={label} min={min} step={step} type="number" disabled={disabled} value={Number.isInteger(value) ? value : Number(value.toFixed(3))}
+          onChange={(event) => { if (!disabled) onChange(Math.max(min, Number(event.target.value) || 0)); }} />
         <small>{suffix}</small>
       </span>
     </label>
