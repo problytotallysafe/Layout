@@ -5,6 +5,7 @@ import {
   moveHostedOpening,
   reflowRoomHostedOpenings,
   reflowWallHostedOpenings,
+  removeItemWithDependents,
   type HostableItem,
 } from "../src/lib/layout-hosting.ts";
 
@@ -103,4 +104,15 @@ test("dragging a hosted opening keeps it on its wall", () => {
   assert.ok(Math.abs(moved.start.y - 40) < 0.001);
   assert.ok(Math.abs(moved.end.y - 40) < 0.001);
   assert.ok(moved.end.x <= 120.001);
+});
+
+
+test("deleting a wall also removes openings hosted by that wall", () => {
+  const items: HostableItem[] = [
+    { id: "wall", type: "wall", start: { x: 0, y: 0 }, end: { x: 50, y: 0 }, thickness: 4.5 },
+    { id: "door", type: "opening", start: { x: 10, y: 0 }, end: { x: 30, y: 0 }, thickness: 4.5, hostId: "wall", hostT: 0.4 },
+    { id: "other", type: "opening", start: { x: 0, y: 20 }, end: { x: 20, y: 20 }, thickness: 4.5 },
+  ];
+  const remaining = removeItemWithDependents(items, "wall");
+  assert.deepEqual(remaining.map((item) => item.id), ["other"]);
 });
