@@ -131,3 +131,55 @@ export function constrainPointToPolygon(
   }
   return closest;
 }
+
+
+export function segmentProjectionFraction(
+  point: GeometryPoint,
+  start: GeometryPoint,
+  end: GeometryPoint,
+) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared < GEOMETRY_EPSILON) return 0;
+  return Math.max(
+    0,
+    Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared),
+  );
+}
+
+export function alignSegmentToHost(
+  hostStart: GeometryPoint,
+  hostEnd: GeometryPoint,
+  segmentLength: number,
+  requestedT: number,
+) {
+  const hostLength = distanceBetween(hostStart, hostEnd);
+  if (hostLength < GEOMETRY_EPSILON) {
+    return {
+      start: { ...hostStart },
+      end: { ...hostEnd },
+      t: 0,
+    };
+  }
+  const usableLength = Math.min(Math.max(segmentLength, 0), hostLength);
+  const halfT = usableLength / hostLength / 2;
+  const t = Math.max(halfT, Math.min(1 - halfT, requestedT));
+  const center = {
+    x: hostStart.x + (hostEnd.x - hostStart.x) * t,
+    y: hostStart.y + (hostEnd.y - hostStart.y) * t,
+  };
+  const ux = (hostEnd.x - hostStart.x) / hostLength;
+  const uy = (hostEnd.y - hostStart.y) / hostLength;
+  return {
+    start: {
+      x: center.x - ux * usableLength / 2,
+      y: center.y - uy * usableLength / 2,
+    },
+    end: {
+      x: center.x + ux * usableLength / 2,
+      y: center.y + uy * usableLength / 2,
+    },
+    t,
+  };
+}
