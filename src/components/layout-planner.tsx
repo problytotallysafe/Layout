@@ -20,6 +20,7 @@ import {
   snapToCommonAngle,
 } from "@/lib/layout-geometry";
 import { assessAxis, balancedOffset, type CutObstacle } from "@/lib/layout-engine";
+import { formatLength, parseLength } from "@/lib/layout-measurements";
 import {
   attachOpeningToNearestHost,
   moveHostedOpening,
@@ -118,34 +119,6 @@ const blankLayout = (id = uid(), projectName = "Untitled layout"): SavedLayout =
 });
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const distance = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
-const formatLength = (inches: number) => {
-  const eighths = Math.max(0, Math.round(inches * 8));
-  const feet = Math.floor(eighths / 96);
-  const remainder = eighths % 96;
-  const wholeInches = Math.floor(remainder / 8);
-  const fraction = remainder % 8;
-  const divisor = fraction === 0 ? 1 : fraction % 4 === 0 ? 4 : fraction % 2 === 0 ? 2 : 1;
-  const fractionLabel = fraction ? ` ${fraction / divisor}/${8 / divisor}` : "";
-  return `${feet}′ ${wholeInches}${fractionLabel}″`;
-};
-const parseLength = (value: string) => {
-  const normalized = value.trim().toLowerCase().replace(/feet|foot|ft/g, "'").replace(/inches|inch|in/g, '"');
-  if (!normalized) return null;
-  if (!normalized.includes("'") && !normalized.includes('"')) {
-    const plain = Number(normalized);
-    return Number.isFinite(plain) ? plain : null;
-  }
-  const feetMatch = normalized.match(/(-?\d+(?:\.\d+)?)\s*'/);
-  const afterFeet = feetMatch ? normalized.slice((feetMatch.index ?? 0) + feetMatch[0].length) : normalized;
-  const inchMatch = afterFeet.match(/(-?\d+(?:\.\d+)?)(?:\s+(\d+)\/(\d+))?\s*"?/);
-  const fractionOnly = afterFeet.match(/(\d+)\/(\d+)/);
-  const feet = feetMatch ? Number(feetMatch[1]) : 0;
-  let inches = inchMatch ? Number(inchMatch[1]) : 0;
-  if (inchMatch?.[2] && inchMatch[3]) inches += Number(inchMatch[2]) / Number(inchMatch[3]);
-  else if (!inchMatch && fractionOnly) inches += Number(fractionOnly[1]) / Number(fractionOnly[2]);
-  const result = feet * 12 + inches;
-  return Number.isFinite(result) ? result : null;
-};
 const displayUnit = (inches: number, unit: MaterialUnit) => unit === "in" ? inches : unit === "mm" ? inches * 25.4 : inches * 2.54;
 const inchesFromUnit = (value: number, unit: MaterialUnit) => unit === "in" ? value : unit === "mm" ? value / 25.4 : value / 2.54;
 const polygonArea = (points: Point[]) => Math.abs(points.reduce((sum, point, index) => {
@@ -274,6 +247,57 @@ function OffsetField({ inches, label, onCommit }: { inches: number; label: strin
             const parsed = parseLength(event.currentTarget.value);
             if (parsed !== null && parsed >= 0) onCommit(parsed);
             else event.currentTarget.value = formatLength(rounded);
+          }}
+        />
+      </span>
+    </label>
+  );
+}
+
+function LengthField({ label, value, onChange, min = 0, disabled = false }: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+  disabled?: boolean;
+}) {
+  const rounded = Math.round(value * 8) / 8;
+  const [draft, setDraft] = useState(formatLength(rounded));
+
+  useEffect(() => {
+    setDraft(formatLength(rounded));
+  }, [rounded]);
+
+  const commit = () => {
+    if (disabled) return;
+    const parsed = parseLength(draft);
+    if (parsed == null || parsed < min) {
+      setDraft(formatLength(rounded));
+      return;
+    }
+    const next = Math.round(parsed * 8) / 8;
+    setDraft(formatLength(next));
+    if (Math.abs(next - value) > 0.0005) onChange(next);
+  };
+
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <span className="number-input">
+        <input
+          aria-label={label}
+          disabled={disabled}
+          value={draft}
+          inputMode="text"
+          autoComplete="off"
+          onChange={(event) => { if (!disabled) setDraft(event.target.value); }}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") {
+              setDraft(formatLength(rounded));
+              event.currentTarget.blur();
+            }
           }}
         />
       </span>
@@ -1615,7 +1639,7 @@ export function LayoutPlanner() {
           {selected ? <section className="panel selected-panel">
             <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? "Wall" : "Opening"}</strong></div>
             <div className="field-row">
-              <NumberField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} suffix="in" min={1} />
+              <LengthField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} min={1} />
               <NumberField label={selectedOpeningHosted ? "Angle (host)" : "Angle"} value={segmentAngleDegrees(selected.start, selected.end)} onChange={updateSelectedAngle} suffix="°" min={0} step={1} disabled={selectedOpeningHosted} />
             </div>
             <NumberField label={selected.type === "wall" ? "Thickness" : selectedOpeningHosted ? "Host wall thickness" : "Wall thickness"} value={selected.thickness} onChange={updateSelectedThickness} suffix="in" min={1} step={.5} disabled={selectedOpeningHosted} />
@@ -1644,14 +1668,14 @@ export function LayoutPlanner() {
           </section> : selectedEdgeStart && selectedEdgeEnd && selectedRoomEdge != null ? <section className="panel selected-panel">
             <div className="panel-heading"><span className="eyebrow">Selected dimension</span><strong>Room edge {selectedRoomEdge + 1}</strong></div>
             <div className="field-row">
-              <NumberField label="Length" value={distance(selectedEdgeStart, selectedEdgeEnd)} onChange={updateRoomEdgeLength} suffix="in" min={1} step={.125} />
+              <LengthField label="Length" value={distance(selectedEdgeStart, selectedEdgeEnd)} onChange={updateRoomEdgeLength} min={1} />
               <NumberField label="Angle" value={segmentAngleDegrees(selectedEdgeStart, selectedEdgeEnd)} onChange={updateRoomEdgeAngle} suffix="°" min={0} step={1} />
             </div>
             <p className="selection-hint">{isRectangle(room) ? "Changing this edge length resizes the rectangle while keeping opposite sides aligned. Changing the angle converts the room to a custom shape." : "Length moves the next corner along this wall direction. Angle rotates this wall around its first corner. Verify adjacent dimensions after changing a custom shape."}</p>
             <button className="text-button room-edge-done" onClick={() => setSelectedRoomEdge(null)}>Done</button>
           </section> : <section className="panel">
             <div className="panel-heading"><span className="eyebrow">Room</span><strong>{isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom shape"}</strong></div>
-            {isRectangle(room) && <div className="field-row"><NumberField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} suffix="in" min={24} /><NumberField label="Length" value={roomHeight} onChange={(value) => resizeRectangle("height", value)} suffix="in" min={24} /></div>}
+            {isRectangle(room) && <div className="field-row"><LengthField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} min={24} /><LengthField label="Length" value={roomHeight} onChange={(value) => resizeRectangle("height", value)} min={24} /></div>}
             <NumberField label="New wall thickness" value={wallThickness} onChange={(value) => { snapshot(); setWallThickness(value); }} suffix="in" min={1} step={.5} />
           </section>}
 
