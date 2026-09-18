@@ -9,6 +9,7 @@ import {
   type SuiteRoom,
 } from "./suite-contract.ts";
 import type { DrawItem, Point, SavedLayout } from "../components/layout-planner";
+import { attachOpeningToNearestHost } from "./layout-hosting.ts";
 
 type SuiteContext = {
   organizationId: string | null;
@@ -82,6 +83,9 @@ function segmentFromObject(entity: SuiteEntity): DrawItem | null {
     start: { x: center.x - dx, y: center.y - dy },
     end: { x: center.x + dx, y: center.y + dy },
     thickness: mmToInches(Number(entity.geometry.depth || 114.3)),
+    hostId: typeof entity.geometry.wallId === "string" ? entity.geometry.wallId : undefined,
+    hostEdgeIndex: Number.isInteger(Number(entity.geometry.layoutHostEdgeIndex)) ? Number(entity.geometry.layoutHostEdgeIndex) : undefined,
+    hostT: Number.isFinite(Number(entity.geometry.layoutHostT)) ? Number(entity.geometry.layoutHostT) : undefined,
   };
 }
 
@@ -106,6 +110,9 @@ function itemFromEntity(entity: SuiteEntity): DrawItem | null {
     start: inchPoint({ x: Number(start.x), y: Number(start.y) }),
     end: inchPoint({ x: Number(end.x), y: Number(end.y) }),
     thickness: mmToInches(Number(entity.geometry.thickness || 114.3)),
+    hostId: typeof entity.geometry.hostId === "string" ? entity.geometry.hostId : undefined,
+    hostEdgeIndex: Number.isInteger(Number(entity.geometry.hostEdgeIndex)) ? Number(entity.geometry.hostEdgeIndex) : undefined,
+    hostT: Number.isFinite(Number(entity.geometry.hostT)) ? Number(entity.geometry.hostT) : undefined,
   };
 }
 
@@ -133,6 +140,9 @@ function entityForItem(item: DrawItem, prior?: SuiteEntity): SuiteEntity {
           ) *
             180) /
           Math.PI,
+        wallId: item.hostId,
+        layoutHostEdgeIndex: item.hostEdgeIndex,
+        layoutHostT: item.hostT,
       },
     };
   }
@@ -147,6 +157,9 @@ function entityForItem(item: DrawItem, prior?: SuiteEntity): SuiteEntity {
       start: mmPoint(item.start),
       end: mmPoint(item.end),
       thickness: inchesToMm(item.thickness),
+      hostId: item.hostId,
+      hostEdgeIndex: item.hostEdgeIndex,
+      hostT: item.hostT,
     },
   } as SuiteEntity;
 }
@@ -274,10 +287,16 @@ export function suiteToLayout(input: unknown): {
         "No compatible room boundary was found. The original shared record was not changed.",
     };
 
-  const imported = room.entities.flatMap((entity) => {
+  const roomInches = vertices.map(inchPoint);
+  const rawImported = room.entities.flatMap((entity) => {
     const item = itemFromEntity(entity);
     return item ? [item] : [];
   });
+  const imported = rawImported.map((item) =>
+    item.type === "opening"
+      ? attachOpeningToNearestHost(item, rawImported, roomInches, 12)
+      : item,
+  );
   const settings = (record(room.extensions?.layout)
     ? room.extensions?.layout
     : {}) as LayoutSettings;
@@ -290,7 +309,7 @@ export function suiteToLayout(input: unknown): {
       revision: Math.max(1, Number(parsed.value.source.revision) || 1),
       updatedAt: now,
       projectName: parsed.value.project.name,
-      room: vertices.map(inchPoint),
+      room: roomInches,
       items: imported,
       tileWidth: mmToInches(Number(settings.tileWidthMm || 304.8)),
       tileHeight: mmToInches(Number(settings.tileHeightMm || 609.6)),
