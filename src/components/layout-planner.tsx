@@ -19,7 +19,12 @@ import {
   segmentAngleDegrees,
   snapToCommonAngle,
 } from "@/lib/layout-geometry";
-import { assessAxis, balancedOffset, type CutObstacle } from "@/lib/layout-engine";
+import {
+  assessAxis,
+  assessPolygonLayout,
+  optimizePolygonLayout,
+  type CutObstacle,
+} from "@/lib/layout-engine";
 import { formatLength, parseLength } from "@/lib/layout-measurements";
 import {
   attachOpeningToNearestHost,
@@ -443,22 +448,35 @@ export function LayoutPlanner() {
       yObstacles: nextY.filter(({ coordinate }) => coordinate > 0 && coordinate < roomHeight),
     };
   }, [items, room, bounds.minX, bounds.minY, roomWidth, roomHeight]);
-  const xCuts = useMemo(() => balancedOffset(roomWidth, actualTileW, grout, xObstacles, patternPhasesX), [roomWidth, actualTileW, grout, xObstacles, patternPhasesX]);
-  const yCuts = useMemo(() => balancedOffset(roomHeight, actualTileH, grout, yObstacles), [roomHeight, actualTileH, grout, yObstacles]);
   const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX), [roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX]);
   const currentYCuts = useMemo(() => assessAxis(roomHeight, actualTileH, grout, origin.y, yObstacles), [roomHeight, actualTileH, grout, origin.y, yObstacles]);
+  const currentPolygonCuts = useMemo(
+    () => assessPolygonLayout(
+      room,
+      actualTileW,
+      actualTileH,
+      grout,
+      { x: bounds.minX + origin.x, y: bounds.minY + origin.y },
+      patternRows,
+    ),
+    [actualTileH, actualTileW, bounds.minX, bounds.minY, grout, origin.x, origin.y, patternRows, room],
+  );
   const selected = items.find((item) => item.id === selectedId) ?? null;
   const selectedOpeningHosted = Boolean(selected?.type === "opening" && (selected.hostId || selected.hostEdgeIndex != null));
   const selectedEdgeStart = selectedRoomEdge == null ? null : room[selectedRoomEdge] ?? null;
   const selectedEdgeEnd = selectedRoomEdge == null ? null : room[(selectedRoomEdge + 1) % room.length] ?? null;
   const dimensionedWall = tool === "select" && selected?.type === "wall" ? selected : null;
-  const minimumCut = Math.min(currentXCuts.minimum, currentYCuts.minimum);
+  const minimumCut = Math.min(
+    currentXCuts.minimum,
+    currentYCuts.minimum,
+    currentPolygonCuts.minimumBoundaryCut,
+  );
   const cutWarning = minimumCut < Math.min(actualTileW, actualTileH) / 2;
   const hasAngledBoundary = room.some((point, index) => {
     const next = room[(index + 1) % room.length];
     return Math.abs(next.x - point.x) > 0.001 && Math.abs(next.y - point.y) > 0.001;
   });
-  const layoutNeedsReview = cutWarning || hasAngledBoundary;
+  const layoutNeedsReview = cutWarning;
 
   const currentSnapshot = useCallback((): Snapshot => ({
     room,
@@ -1145,7 +1163,17 @@ export function LayoutPlanner() {
   const cancelRoom = () => { setDraftRoom([]); setTool("select"); };
   const autoBalance = () => {
     snapshot();
-    setOrigin({ x: xCuts.offset, y: yCuts.offset });
+    const optimized = optimizePolygonLayout(
+      room,
+      actualTileW,
+      actualTileH,
+      grout,
+      { x: bounds.minX, y: bounds.minY },
+      xObstacles,
+      yObstacles,
+      patternRows,
+    );
+    setOrigin(optimized.offset);
   };
   const favorOpening = () => {
     if (!selected || selected.type !== "opening") return;
@@ -1509,7 +1537,7 @@ export function LayoutPlanner() {
               <div><dt>{materialType === "tile" ? "Grout" : "Piece gap"}</dt><dd>{formatLength(grout)}</dd></div>
               <div><dt>Pattern</dt><dd>{{ straight: "Straight", "half-offset": "1/2 offset", "third-offset": "1/3 offset" }[pattern]} · {rotation}°</dd></div>
               <div><dt>Floor area</dt><dd>{areaSqFt.toFixed(1)} ft²</dd></div>
-              <div><dt>{hasAngledBoundary ? "Axis cut check" : "Smallest cut"}</dt><dd>{formatLength(minimumCut)}{hasAngledBoundary ? " · verify angled cuts" : ""}</dd></div>
+              <div><dt>Smallest cut</dt><dd>{formatLength(minimumCut)}{hasAngledBoundary ? " · angled boundaries included" : ""}</dd></div>
             </dl>
           </header>
           <div className="canvas-toolbar">
@@ -1755,8 +1783,8 @@ export function LayoutPlanner() {
           </section>
 
           <section className="panel results-panel">
-            <div className="panel-heading inline-heading"><span><span className="eyebrow">Layout check</span><strong>{hasAngledBoundary ? "Review angled boundary cuts" : cutWarning ? "Review edge cuts" : "Cuts look balanced"}</strong></span><span className={`result-icon ${layoutNeedsReview ? "warning" : ""}`}>{layoutNeedsReview ? "!" : <Check size={17} />}</span></div>
-            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Material + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>{hasAngledBoundary ? "Smallest axis cut" : "Smallest planned cut"}</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
+            <div className="panel-heading inline-heading"><span><span className="eyebrow">Layout check</span><strong>{cutWarning ? "Review small cuts" : hasAngledBoundary ? "Angled cuts look balanced" : "Cuts look balanced"}</strong></span><span className={`result-icon ${layoutNeedsReview ? "warning" : ""}`}>{layoutNeedsReview ? "!" : <Check size={17} />}</span></div>
+            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Material + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest boundary cut</span><strong>{formatLength(minimumCut)}</strong></div></div>
             <div className="start-reference-card">
               <span>Exact reference position</span>
               <div className="reference-fields">
@@ -1765,7 +1793,7 @@ export function LayoutPlanner() {
               </div>
               <small>{formatLength(startRightReference)} from right · {formatLength(startBottomReference)} from bottom</small>
             </div>
-            <p>{hasAngledBoundary ? "The optimizer balances the grid phase, room vertices, walls, and openings, but angled boundary pieces still need visual field verification before installation. The app will not label those cuts exact until full polygon cut geometry is verified." : cutWarning ? "A room edge, wall face, wall end, or opening may create a cut below half a material piece. Use Optimize cuts, drag the reference cross, or nudge it precisely." : "The current material position avoids small cuts across the room edges, walls, and openings being checked."}</p>
+            <p>{cutWarning ? "A room boundary, wall, or opening creates a small planned cut. Optimize cuts, drag the reference cross, or nudge it precisely." : hasAngledBoundary ? "Angled room boundaries are included in the cut-depth calculation and optimization. Verify final field conditions and substrate geometry before setting material." : "The current material position avoids small cuts across the room boundaries, walls, and openings being checked."}</p>
           </section>
 
           <section className="panel notes-panel">
