@@ -139,13 +139,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .dimension-edge:hover rect:not(.dimension-hit), .dimension-edge.selected rect:not(.dimension-hit) { fill: #fff8e6; stroke: var(--gold); stroke-width: .7; }
 .dimension-edge.selected text { fill: var(--ink-deep); font-weight: 850; }
 .plan-item { cursor: move; }
-.plan-item line { stroke: #243f35; stroke-linecap: square; }
-.plan-item.opening > line:first-child { stroke: white; }
+.plan-item .item-hit { stroke: transparent !important; stroke-linecap: round; pointer-events: stroke; cursor: grab; }
+.plan-item > line:not(.item-hit):not(.opening-center) { stroke: #243f35; stroke-linecap: square; }
+.plan-item.opening > line:not(.item-hit):not(.opening-center) { stroke: white; }
 .plan-item .opening-center { stroke: var(--gold); stroke-width: .8; stroke-dasharray: 2 1; }
 .plan-item text, .draft-line text { fill: var(--ink-deep); font-size: 3.3px; text-anchor: middle; paint-order: stroke; stroke: white; stroke-width: 1.4; }
-.plan-item.selected > line:first-child { stroke: var(--gold); }
-.plan-item.selected.opening > line:first-child { stroke: white; }
-.plan-item circle { fill: var(--gold); stroke: white; stroke-width: .9; cursor: grab; }
+.plan-item.selected > line:not(.item-hit):not(.opening-center) { stroke: var(--gold); }
+.plan-item.selected.opening > line:not(.item-hit):not(.opening-center) { stroke: white; }
+.plan-item circle { fill: var(--gold); stroke: white; stroke-width: .9; cursor: grab; pointer-events: all; }
 .draft-line line { stroke: var(--gold); stroke-linecap: square; opacity: .92; }
 .draft-room polyline { fill: none; stroke: var(--gold); stroke-width: 1.5; stroke-dasharray: 4 2; }
 .draft-room circle { fill: var(--ink); stroke: white; stroke-width: .5; }
@@ -235,6 +236,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .reference-fields .field { margin-top: 0; font-size: .68rem; }
 .room-edge-done { width: 100%; margin-top: 8px; }
 .results-panel p, .install-panel p { margin: 12px 0 0; color: var(--muted); font-size: .73rem; line-height: 1.45; }
+.optimization-feedback { display: flex; align-items: flex-start; gap: 7px; margin-top: 10px; padding: 9px 10px; border: 1px solid #dbc47f; border-radius: 9px; background: #fff9e8; color: #5f4a20; font-size: .7rem; line-height: 1.45; }
+.optimization-feedback svg { flex: 0 0 auto; margin-top: 1px; color: #a57a21; }
 .notes-panel textarea { width: 100%; min-height: 88px; resize: vertical; padding: 10px 11px; border: 1px solid #d6dfda; border-radius: 10px; outline: 0; background: #fbfcfb; color: var(--ink-deep); line-height: 1.45; }
 .notes-panel textarea:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(209,164,78,.15); }
 .install-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
@@ -314,7 +317,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
   .canvas-wrap { height: 5.65in; min-height: 0; overflow: hidden; border: 0; border-radius: 0; background: white; box-shadow: none; }
   .drawing-canvas { width: 100%; height: 100%; min-width: 0; aspect-ratio: auto; }
   .plan-item circle, .wall-offset-guides, .draft-offset-guides, .draft-line, .draft-room { display: none; }
-  .plan-item.selected > line:first-child { stroke: #243f35; }
+  .plan-item .item-hit { display: none; }
+  .plan-item.selected > line:not(.item-hit):not(.opening-center) { stroke: #243f35; }
   .print-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #cfd8d3; }
   .print-summary div { display: grid; gap: 3px; }
   .print-summary span { color: var(--muted); font-size: 7pt; text-transform: uppercase; }
