@@ -265,9 +265,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
   .canvas-toolbar { min-height: 46px; padding-bottom: 9px; }
   .mode-copy span { display: none; }
   .zoom-controls { gap: 2px; }
-  .zoom-controls button { width: 36px; height: 36px; }
+  .header-actions .icon-button { width: 42px; height: 42px; }
+  .zoom-controls button { width: 42px; height: 42px; }
   .zoom-controls span { min-width: 32px; font-size: .68rem; }
-  .snap-toggle { min-height: 36px; padding: 0 7px; }
+  .snap-toggle { min-height: 42px; padding: 0 9px; }
   .nudge-control button { width: 42px; height: 42px; }
   .zoom-controls .fit-button { padding: 0 7px; }
   .canvas-wrap { height: 54dvh; min-height: 390px; border-radius: 13px; }
@@ -291,7 +292,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
   .snap-toggle { font-size: .66rem; padding: 0 5px; }
   .zoom-controls span { display: none; }
   .header-actions { gap: 4px; }
-  .icon-button { width: 34px; height: 34px; }
+  .icon-button { width: 42px; height: 42px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
 
