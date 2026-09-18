@@ -373,6 +373,11 @@ export function LayoutPlanner() {
   const dimensionedWall = tool === "select" && selected?.type === "wall" ? selected : null;
   const minimumCut = Math.min(currentXCuts.minimum, currentYCuts.minimum);
   const cutWarning = minimumCut < Math.min(actualTileW, actualTileH) / 2;
+  const hasAngledBoundary = room.some((point, index) => {
+    const next = room[(index + 1) % room.length];
+    return Math.abs(next.x - point.x) > 0.001 && Math.abs(next.y - point.y) > 0.001;
+  });
+  const layoutNeedsReview = cutWarning || hasAngledBoundary;
 
   const currentSnapshot = useCallback((): Snapshot => ({
     room,
@@ -1286,7 +1291,7 @@ export function LayoutPlanner() {
       <section className={readOnly?"workspace workspace-readonly":"workspace"}>
         <nav className="toolrail" aria-label="Drawing tools">
           {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"] ] as const).map(([value, Icon, label]) => (
-            <button key={value} className={tool === value ? "active" : ""} onClick={() => { setTool(value); setDraftRoom([]); setSelectedId(null); }} aria-pressed={tool === value}>
+            <button key={value} className={tool === value ? "active" : ""} onClick={() => { setTool(value); setDraftRoom([]); setSelectedId(null); setSelectedRoomEdge(null); }} aria-pressed={tool === value}>
               <Icon size={21} /><span>{label}</span>
             </button>
           ))}
@@ -1305,7 +1310,7 @@ export function LayoutPlanner() {
           <div className="canvas-toolbar">
             <div className="mode-copy">
               <strong>{{ select: "Select and adjust", pan: "Move around the plan", floor: "Move the tile field", wall: "Draw a straight wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
-              <span>{{ select: "Drag a selected wall to move it, or drag either end to resize it.", pan: "Drag the work area after zooming in.", floor: "Grab the floor and drag the entire tile layout in any direction.", wall: "Walls snap straight. Hold Alt only when you need an angle.", opening: "Openings snap straight along the wall.", room: "Tap each corner, then finish the room." }[tool]}</span>
+              <span>{{ select: "Tap a dimension, wall, or opening to edit it exactly.", pan: "Drag the work area after zooming in.", floor: "Drag the reference cross and material grid together.", wall: "Snap helps with endpoints and common 45° angles. Hold Alt on desktop to bypass Snap.", opening: "Snap helps align openings to endpoints and common angles.", room: "Tap each corner. Snap helps keep common angles and closes to the first point." }[tool]}</span>
             </div>
             {tool === "room" && <div className="draft-actions"><button className="text-button" onClick={cancelRoom}>Cancel</button><button className="primary small" disabled={draftRoom.length < 3} onClick={finishRoom}>Finish room</button></div>}
             <button
@@ -1512,15 +1517,22 @@ export function LayoutPlanner() {
               </div>
             </div>
             <div className="button-row"><button className="secondary" onClick={() => { snapshot(); setRotation((value) => value === 0 ? 90 : 0); }}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Optimize cuts</button></div>
-            <button className={`grab-floor-button ${tool === "floor" ? "active" : ""}`} onClick={() => { setShowTile(true); setTool("floor"); setSelectedId(null); }}><Move size={16} /> {tool === "floor" ? "Drag reference lines and material" : "Move reference lines / material"}</button>
+            <button className={`grab-floor-button ${tool === "floor" ? "active" : ""}`} onClick={() => { setShowTile(true); setTool("floor"); setSelectedId(null); setSelectedRoomEdge(null); }}><Move size={16} /> {tool === "floor" ? "Drag reference lines and material" : "Move reference lines / material"}</button>
             <div className="nudge-control"><span>Precision adjustment · 1/8″</span><div><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, x: point.x - .125 })); }} aria-label="Move layout left">←</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, y: point.y - .125 })); }} aria-label="Move layout up">↑</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, y: point.y + .125 })); }} aria-label="Move layout down">↓</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, x: point.x + .125 })); }} aria-label="Move layout right">→</button></div></div>
           </section>
 
           <section className="panel results-panel">
-            <div className="panel-heading inline-heading"><span><span className="eyebrow">Layout check</span><strong>{cutWarning ? "Review edge cuts" : "Cuts look balanced"}</strong></span><span className={`result-icon ${cutWarning ? "warning" : ""}`}>{cutWarning ? "!" : <Check size={17} />}</span></div>
-            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest planned cut</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
-            <div className="start-reference-card"><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left · {formatLength(startRightReference)} from right</strong><span>Horizontal chalk line</span><strong>{formatLength(startTopReference)} from top · {formatLength(startBottomReference)} from bottom</strong></div>
-            <p>{cutWarning ? "A room edge, wall face, wall end, or opening may create a cut below half a tile. Use Optimize cuts, drag the floor, or nudge it precisely." : "The current tile position avoids small cuts across the room edges, walls, and openings being checked."}</p>
+            <div className="panel-heading inline-heading"><span><span className="eyebrow">Layout check</span><strong>{hasAngledBoundary ? "Review angled boundary cuts" : cutWarning ? "Review edge cuts" : "Cuts look balanced"}</strong></span><span className={`result-icon ${layoutNeedsReview ? "warning" : ""}`}>{layoutNeedsReview ? "!" : <Check size={17} />}</span></div>
+            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Material + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>{hasAngledBoundary ? "Smallest axis cut" : "Smallest planned cut"}</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
+            <div className="start-reference-card">
+              <span>Exact reference position</span>
+              <div className="reference-fields">
+                <OffsetField label="Vertical from left" inches={startLeftReference} onCommit={(value) => setReferenceOffset("x", value)} />
+                <OffsetField label="Horizontal from top" inches={startTopReference} onCommit={(value) => setReferenceOffset("y", value)} />
+              </div>
+              <small>{formatLength(startRightReference)} from right · {formatLength(startBottomReference)} from bottom</small>
+            </div>
+            <p>{hasAngledBoundary ? "The optimizer balances the grid phase, room vertices, walls, and openings, but angled boundary pieces still need visual field verification before installation. The app will not label those cuts exact until full polygon cut geometry is verified." : cutWarning ? "A room edge, wall face, wall end, or opening may create a cut below half a material piece. Use Optimize cuts, drag the reference cross, or nudge it precisely." : "The current material position avoids small cuts across the room edges, walls, and openings being checked."}</p>
           </section>
 
           <section className="panel notes-panel">
@@ -1544,7 +1556,7 @@ export function LayoutPlanner() {
 
       <nav className="mobile-tools" aria-label="Drawing tools">
         {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Tile"] ] as const).map(([value, Icon, label]) => (
-          <button key={value} className={value !== "tile" && tool === value ? "active" : ""} onClick={() => { if (value === "tile") document.querySelector(".tile-panel")?.scrollIntoView({ behavior: "smooth" }); else setTool(value); }}><Icon size={19} /><span>{label}</span></button>
+          <button key={value} className={value !== "tile" && tool === value ? "active" : ""} onClick={() => { if (value === "tile") document.querySelector(".tile-panel")?.scrollIntoView({ behavior: "smooth" }); else { setTool(value); setDraftRoom([]); setSelectedId(null); setSelectedRoomEdge(null); } }}><Icon size={19} /><span>{label}</span></button>
         ))}
       </nav>
     </main>
