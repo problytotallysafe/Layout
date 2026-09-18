@@ -391,6 +391,7 @@ export function LayoutPlanner() {
   const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX), [roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX]);
   const currentYCuts = useMemo(() => assessAxis(roomHeight, actualTileH, grout, origin.y, yObstacles), [roomHeight, actualTileH, grout, origin.y, yObstacles]);
   const selected = items.find((item) => item.id === selectedId) ?? null;
+  const selectedOpeningHosted = Boolean(selected?.type === "opening" && (selected.hostId || selected.hostEdgeIndex != null));
   const selectedEdgeStart = selectedRoomEdge == null ? null : room[selectedRoomEdge] ?? null;
   const selectedEdgeEnd = selectedRoomEdge == null ? null : room[(selectedRoomEdge + 1) % room.length] ?? null;
   const dimensionedWall = tool === "select" && selected?.type === "wall" ? selected : null;
@@ -1104,6 +1105,17 @@ export function LayoutPlanner() {
         : current.map((candidate) => candidate.id === item.id ? updated : candidate);
     });
   };
+  const detachSelectedOpening = () => {
+    if (!selected || selected.type !== "opening" || !selectedOpeningHosted) return;
+    snapshot();
+    setItems((current) => current.map((item) => item.id === selected.id ? {
+      ...item,
+      hostId: undefined,
+      hostEdgeIndex: undefined,
+      hostT: undefined,
+    } : item));
+  };
+
   const updateSelectedAngle = (degrees: number) => {
     if (!selected) return;
     snapshot();
@@ -1264,20 +1276,30 @@ export function LayoutPlanner() {
       const rawTarget = side === "left" ? bounds.minX + value + halfThickness : bounds.maxX - value - halfThickness;
       const target = clamp(rawTarget, bounds.minX + halfThickness, bounds.maxX - halfThickness);
       const delta = target - guideWallMidpoint.x;
-      setItems((current) => current.map((item) => item.id === dimensionedWall.id ? {
-        ...item,
-        start: { ...item.start, x: item.start.x + delta },
-        end: { ...item.end, x: item.end.x + delta },
-      } : item));
+      setItems((current) => {
+        const wall = current.find((item) => item.id === dimensionedWall.id);
+        if (!wall) return current;
+        const updated = {
+          ...wall,
+          start: { ...wall.start, x: wall.start.x + delta },
+          end: { ...wall.end, x: wall.end.x + delta },
+        };
+        return reflowWallHostedOpenings(current, wall.id, updated);
+      });
     } else {
       const rawTarget = side === "top" ? bounds.minY + value + halfThickness : bounds.maxY - value - halfThickness;
       const target = clamp(rawTarget, bounds.minY + halfThickness, bounds.maxY - halfThickness);
       const delta = target - guideWallMidpoint.y;
-      setItems((current) => current.map((item) => item.id === dimensionedWall.id ? {
-        ...item,
-        start: { ...item.start, y: item.start.y + delta },
-        end: { ...item.end, y: item.end.y + delta },
-      } : item));
+      setItems((current) => {
+        const wall = current.find((item) => item.id === dimensionedWall.id);
+        if (!wall) return current;
+        const updated = {
+          ...wall,
+          start: { ...wall.start, y: wall.start.y + delta },
+          end: { ...wall.end, y: wall.end.y + delta },
+        };
+        return reflowWallHostedOpenings(current, wall.id, updated);
+      });
     }
   };
   const tileFill = {
