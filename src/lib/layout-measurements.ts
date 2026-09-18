@@ -26,7 +26,8 @@ function parseInchesPart(raw: string) {
     .trim()
     .replace(/"/g, "")
     .replace(/-/g, " ")
-    .replace(/\s+/g, " ");
+    .replace(/\s+/g, " ")
+    .trim();
   if (!cleaned) return 0;
 
   const mixed = cleaned.match(/^([+-]?\d+(?:\.\d+)?)\s+(\d+)\/(\d+)$/);
