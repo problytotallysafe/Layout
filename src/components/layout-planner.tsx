@@ -41,6 +41,7 @@ export type DrawItem = {
 };
 type Tool = "select" | "pan" | "floor" | "room" | "wall" | "opening";
 type MaterialUnit = "in" | "mm" | "cm";
+type MaterialType = "tile" | "plank";
 type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
 type LayoutPattern = "straight" | "half-offset" | "third-offset";
 type DragState =
@@ -57,6 +58,7 @@ type Snapshot = {
   tileHeight: number;
   grout: number;
   materialUnit: MaterialUnit;
+  materialType: MaterialType;
   tileAppearance: TileAppearance;
   pattern: LayoutPattern;
   wastePercent: number;
@@ -107,6 +109,7 @@ const blankLayout = (id = uid(), projectName = "Untitled layout"): SavedLayout =
   tileHeight: 24,
   grout: 0.125,
   materialUnit: "in",
+  materialType: "tile",
   tileAppearance: "transparent",
   pattern: "straight",
   wastePercent: 10,
@@ -328,6 +331,7 @@ export function LayoutPlanner() {
   const [tileHeight, setTileHeight] = useState(24);
   const [grout, setGrout] = useState(0.125);
   const [materialUnit, setMaterialUnit] = useState<MaterialUnit>("in");
+  const [materialType, setMaterialType] = useState<MaterialType>("tile");
   const [tileAppearance, setTileAppearance] = useState<TileAppearance>("transparent");
   const [pattern, setPattern] = useState<LayoutPattern>("straight");
   const [wastePercent, setWastePercent] = useState(10);
@@ -458,6 +462,7 @@ export function LayoutPlanner() {
     tileHeight,
     grout,
     materialUnit,
+    materialType,
     tileAppearance,
     pattern,
     wastePercent,
@@ -466,7 +471,7 @@ export function LayoutPlanner() {
     rotation,
     showTile,
     snapEnabled,
-  }), [grout, items, materialUnit, origin, pattern, room, rotation, showTile, snapEnabled, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
+  }), [grout, items, materialType, materialUnit, origin, pattern, room, rotation, showTile, snapEnabled, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   const snapshot = useCallback(() => {
     setHistory((current) => [...current.slice(-29), currentSnapshot()]);
@@ -481,6 +486,7 @@ export function LayoutPlanner() {
     setTileHeight(state.tileHeight);
     setGrout(state.grout);
     setMaterialUnit(state.materialUnit);
+    setMaterialType(state.materialType);
     setTileAppearance(state.tileAppearance);
     setPattern(state.pattern);
     setWastePercent(state.wastePercent);
@@ -502,6 +508,7 @@ export function LayoutPlanner() {
     setTileHeight(layout.tileHeight);
     setGrout(layout.grout);
     setMaterialUnit(layout.materialUnit);
+    setMaterialType(layout.materialType || "tile");
     setTileAppearance(layout.tileAppearance);
     setPattern(layout.pattern || "straight");
     setWastePercent(layout.wastePercent);
@@ -551,6 +558,7 @@ export function LayoutPlanner() {
       tileHeight,
       grout,
       materialUnit,
+      materialType,
       tileAppearance,
       pattern,
       wastePercent,
@@ -574,7 +582,7 @@ export function LayoutPlanner() {
     }
     setSaved(true);
     return document;
-  }, [activeLayoutId, grout, items, materialUnit, notes, origin, pattern, persistLibrary, projectName, room, rotation, showTile, snapEnabled, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
+  }, [activeLayoutId, grout, items, materialType, materialUnit, notes, origin, pattern, persistLibrary, projectName, room, rotation, showTile, snapEnabled, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
