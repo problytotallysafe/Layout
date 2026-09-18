@@ -1054,7 +1054,7 @@ export function LayoutPlanner() {
     if (draftRoom.length < 3) return;
     snapshot();
     setRoom(draftRoom);
-    setItems((current) => current.map((item) => constrainWallToBounds(item, roomBounds(draftRoom))));
+    setItems((current) => reconcileItemsWithRoom(current, draftRoom));
     setDraftRoom([]);
     setTool("select");
   };
@@ -1134,9 +1134,8 @@ export function LayoutPlanner() {
       x: axis === "width" && point.x === b.maxX ? b.minX + value : point.x,
       y: axis === "height" && point.y === b.maxY ? b.minY + value : point.y,
     }));
-    const nextBounds = roomBounds(nextRoom);
     setRoom(nextRoom);
-    setItems((current) => current.map((item) => constrainWallToBounds(item, nextBounds)));
+    setItems((current) => reconcileItemsWithRoom(current, nextRoom));
   };
 
   const updateRoomEdgeLength = (value: number) => {
@@ -1152,9 +1151,8 @@ export function LayoutPlanner() {
     snapshot();
     const nextPoint = endpointAtAngle(start, value, segmentAngleDegrees(start, end));
     const nextRoom = room.map((point, index) => index === nextIndex ? nextPoint : point);
-    const nextBounds = roomBounds(nextRoom);
     setRoom(nextRoom);
-    setItems((current) => current.map((item) => constrainWallToBounds(item, nextBounds)));
+    setItems((current) => reconcileItemsWithRoom(current, nextRoom));
   };
 
   const updateRoomEdgeAngle = (degrees: number) => {
@@ -1165,9 +1163,8 @@ export function LayoutPlanner() {
     snapshot();
     const nextPoint = endpointAtAngle(start, distance(start, end), degrees);
     const nextRoom = room.map((point, index) => index === nextIndex ? nextPoint : point);
-    const nextBounds = roomBounds(nextRoom);
     setRoom(nextRoom);
-    setItems((current) => current.map((item) => constrainWallToBounds(item, nextBounds)));
+    setItems((current) => reconcileItemsWithRoom(current, nextRoom));
   };
   const undo = useCallback(() => {
     const previous = history.at(-1);
