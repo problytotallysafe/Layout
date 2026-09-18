@@ -180,8 +180,10 @@ test("editing one suite room preserves unrelated rooms", async () => {
   const imported = suiteToLayout(input);
   assert.ok(imported.layout);
   if (!imported.layout) return;
+  imported.layout.roomName = "Primary Bath Updated";
   const exported = layoutToSuite(imported.layout);
   assert.equal(exported.project.rooms.length, 2);
+  assert.equal(exported.project.rooms[0].name, "Primary Bath Updated");
   const hall = exported.project.rooms.find((room) => room.id === "suite-fixture-room-2");
   assert.ok(hall);
   assert.equal(hall?.extensions?.keep, "unchanged");
