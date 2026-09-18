@@ -25,7 +25,7 @@ import {
   optimizePolygonLayout,
   type CutObstacle,
 } from "@/lib/layout-engine";
-import { formatLength, parseLength } from "@/lib/layout-measurements";
+import { formatInchesInput, formatLength, parseLength } from "@/lib/layout-measurements";
 import {
   attachOpeningToNearestHost,
   moveHostedOpening,
@@ -197,16 +197,19 @@ const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, i
 function NumberField({ label, value, onChange, suffix, min = 0, step = 1, disabled = false }: {
   label: string; value: number; onChange: (value: number) => void; suffix: string; min?: number; step?: number; disabled?: boolean;
 }) {
-  const displayValue = Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
+  const fractionalInches = suffix === "in";
+  const displayValue = fractionalInches
+    ? formatInchesInput(value)
+    : Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
   const commit = (input: HTMLInputElement) => {
     if (disabled) return;
-    const parsed = Number(input.value);
-    if (!Number.isFinite(parsed) || parsed < min) {
+    const parsed = fractionalInches ? parseLength(input.value) : Number(input.value);
+    if (parsed == null || !Number.isFinite(parsed) || parsed < min) {
       input.value = displayValue;
       return;
     }
     const next = Math.max(min, parsed);
-    input.value = String(Number(next.toFixed(3)));
+    input.value = fractionalInches ? formatInchesInput(next) : String(Number(next.toFixed(3)));
     if (Math.abs(next - value) > 0.0005) onChange(next);
   };
 
@@ -219,10 +222,11 @@ function NumberField({ label, value, onChange, suffix, min = 0, step = 1, disabl
           aria-label={label}
           min={min}
           step={step}
-          type="number"
+          type={fractionalInches ? "text" : "number"}
           disabled={disabled}
           defaultValue={displayValue}
-          inputMode="decimal"
+          inputMode={fractionalInches ? "text" : "decimal"}
+          autoComplete="off"
           onBlur={(event) => commit(event.currentTarget)}
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
