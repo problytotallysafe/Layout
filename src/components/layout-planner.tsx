@@ -674,6 +674,12 @@ export function LayoutPlanner() {
   }, [applyLayout, persistLibrary]);
 
   useEffect(() => {
+    const saveNow = () => { saveCurrentLayout(); };
+    window.addEventListener("buildr:save-now", saveNow);
+    return () => window.removeEventListener("buildr:save-now", saveNow);
+  }, [saveCurrentLayout]);
+
+  useEffect(() => {
     if (!hydrated) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
