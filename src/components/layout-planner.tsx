@@ -191,17 +191,45 @@ function cutAtBoundary(coordinate: number, tile: number, grout: number, rawOffse
   return side === "before" ? phase : tile - phase;
 }
 
-function assessAxis(span: number, tile: number, grout: number, rawOffset: number, obstacles: CutObstacle[]) {
-  const edges = edgeCuts(span, tile, grout, rawOffset);
-  const obstacleCuts = obstacles.map((obstacle) => cutAtBoundary(obstacle.coordinate, tile, grout, rawOffset, obstacle.side));
-  return { ...edges, minimum: Math.min(edges.left, edges.right, ...obstacleCuts) };
+function assessAxis(
+  span: number,
+  tile: number,
+  grout: number,
+  rawOffset: number,
+  obstacles: CutObstacle[],
+  phaseOffsets: number[] = [0],
+) {
+  const phases = phaseOffsets.length ? phaseOffsets : [0];
+  const assessments = phases.map((phase) => {
+    const offset = rawOffset + phase;
+    const edges = edgeCuts(span, tile, grout, offset);
+    const obstacleCuts = obstacles.map((obstacle) =>
+      cutAtBoundary(obstacle.coordinate, tile, grout, offset, obstacle.side),
+    );
+    return {
+      left: edges.left,
+      right: edges.right,
+      minimum: Math.min(edges.left, edges.right, ...obstacleCuts),
+    };
+  });
+  return {
+    left: Math.min(...assessments.map((item) => item.left)),
+    right: Math.min(...assessments.map((item) => item.right)),
+    minimum: Math.min(...assessments.map((item) => item.minimum)),
+  };
 }
 
-function balancedOffset(span: number, tile: number, grout: number, obstacles: CutObstacle[]) {
+function balancedOffset(
+  span: number,
+  tile: number,
+  grout: number,
+  obstacles: CutObstacle[],
+  phaseOffsets: number[] = [0],
+) {
   const pitch = tile + grout;
   let best = { offset: 0, score: -Infinity, left: 0, right: 0, minimum: 0 };
   for (let offset = -pitch; offset <= 0; offset += 0.125) {
-    const assessment = assessAxis(span, tile, grout, offset, obstacles);
+    const assessment = assessAxis(span, tile, grout, offset, obstacles, phaseOffsets);
     const score = assessment.minimum * 100 - Math.abs(assessment.left - assessment.right);
     if (score > best.score) best = { offset, score, ...assessment };
   }
@@ -339,6 +367,13 @@ export function LayoutPlanner() {
   const bounds = useMemo(() => roomBounds(room), [room]);
   const actualTileW = rotation === 0 ? tileWidth : tileHeight;
   const actualTileH = rotation === 0 ? tileHeight : tileWidth;
+  const pitchX = actualTileW + grout;
+  const pitchY = actualTileH + grout;
+  const patternRows = pattern === "half-offset" ? 2 : pattern === "third-offset" ? 3 : 1;
+  const patternPhasesX = useMemo(
+    () => Array.from({ length: patternRows }, (_, index) => index * pitchX / patternRows),
+    [patternRows, pitchX],
+  );
   const roomWidth = bounds.maxX - bounds.minX;
   const roomHeight = bounds.maxY - bounds.minY;
   const areaSqFt = polygonArea(room) / 144;
@@ -386,9 +421,9 @@ export function LayoutPlanner() {
       yObstacles: nextY.filter(({ coordinate }) => coordinate > 0 && coordinate < roomHeight),
     };
   }, [items, bounds.minX, bounds.minY, roomWidth, roomHeight]);
-  const xCuts = useMemo(() => balancedOffset(roomWidth, actualTileW, grout, xObstacles), [roomWidth, actualTileW, grout, xObstacles]);
+  const xCuts = useMemo(() => balancedOffset(roomWidth, actualTileW, grout, xObstacles, patternPhasesX), [roomWidth, actualTileW, grout, xObstacles, patternPhasesX]);
   const yCuts = useMemo(() => balancedOffset(roomHeight, actualTileH, grout, yObstacles), [roomHeight, actualTileH, grout, yObstacles]);
-  const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles), [roomWidth, actualTileW, grout, origin.x, xObstacles]);
+  const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX), [roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX]);
   const currentYCuts = useMemo(() => assessAxis(roomHeight, actualTileH, grout, origin.y, yObstacles), [roomHeight, actualTileH, grout, origin.y, yObstacles]);
   const selected = items.find((item) => item.id === selectedId) ?? null;
   const dimensionedWall = tool === "select" && selected?.type === "wall" ? selected : null;
@@ -1043,8 +1078,6 @@ export function LayoutPlanner() {
   const roomCenter = polygonCenter(room);
   const patternX = bounds.minX + origin.x;
   const patternY = bounds.minY + origin.y;
-  const pitchX = actualTileW + grout;
-  const pitchY = actualTileH + grout;
   const startX = patternX + Math.floor(((bounds.minX + bounds.maxX) / 2 - patternX) / pitchX) * pitchX;
   const startY = patternY + Math.floor(((bounds.minY + bounds.maxY) / 2 - patternY) / pitchY) * pitchY;
   const startLeftReference = Math.max(0, startX - bounds.minX);
@@ -1232,8 +1265,16 @@ export function LayoutPlanner() {
                 <pattern id="concrete-fill" width="7" height="7" patternUnits="userSpaceOnUse">
                   <rect width="7" height="7" fill="#c9cbc8" /><circle cx="1" cy="1.5" r=".25" fill="#999d99" /><circle cx="5.4" cy="3.5" r=".3" fill="#acafab" /><circle cx="2.8" cy="6" r=".2" fill="#8f948f" />
                 </pattern>
-                <pattern id="tile-pattern" x={patternX} y={patternY} width={actualTileW + grout} height={actualTileH + grout} patternUnits="userSpaceOnUse">
-                  <rect width={actualTileW} height={actualTileH} rx=".45" fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
+                <pattern id="tile-pattern" x={patternX} y={patternY} width={pitchX} height={pitchY * patternRows} patternUnits="userSpaceOnUse">
+                  {Array.from({ length: patternRows }, (_, row) => {
+                    const shift = row * pitchX / patternRows;
+                    return (
+                      <g key={row}>
+                        <rect x={shift - pitchX} y={row * pitchY} width={actualTileW} height={actualTileH} rx=".45" fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
+                        <rect x={shift} y={row * pitchY} width={actualTileW} height={actualTileH} rx=".45" fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
+                      </g>
+                    );
+                  })}
                 </pattern>
                 <clipPath id="room-clip"><polygon points={roomPath} /></clipPath>
               </defs>
