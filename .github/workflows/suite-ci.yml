@@ -27,6 +27,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
       - run: npm ci
       - name: Suite and offline sync tests
         run: npm run test:suite
