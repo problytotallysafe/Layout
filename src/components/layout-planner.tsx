@@ -47,6 +47,7 @@ type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concre
 type LayoutPattern = "straight" | "half-offset" | "third-offset";
 type DragState =
   | { kind: "draw"; start: Point; current: Point }
+  | { kind: "room-tap"; start: Point; current: Point }
   | { kind: "endpoint"; id: string; endpoint: "start" | "end" }
   | { kind: "item"; id: string; anchor: Point; originalStart: Point; originalEnd: Point }
   | { kind: "pan"; clientX: number; clientY: number; origin: Point }
@@ -959,6 +960,11 @@ export function LayoutPlanner() {
       return;
     }
     if (tool === "room") {
+      if (event.pointerType === "touch") {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setDrag({ kind: "room-tap", start: point, current: point });
+        return;
+      }
       setDraftRoom((current) => {
         const previous = current.at(-1);
         if (!previous || !snapEnabled || event.altKey) return [...current, point];
@@ -990,6 +996,19 @@ export function LayoutPlanner() {
     const rawPoint = pointerPoint(event);
     const roomPoint = constrainPointToPolygon(rawPoint, room);
     const point = drag.kind === "draw" && tool === "wall" ? clampWallPoint(roomPoint, wallThickness, bounds) : rawPoint;
+    if (drag.kind === "room-tap") {
+      const previous = draftRoom.at(-1);
+      const closeToStart = draftRoom.length >= 3
+        ? nearestSnapPoint(point, [draftRoom[0]], 3)
+        : { point, snapped: false };
+      const snapped = !previous || !snapEnabled
+        ? point
+        : closeToStart.snapped
+          ? closeToStart.point
+          : snapToCommonAngle(previous, point);
+      setDrag({ ...drag, current: snapped });
+      return;
+    }
     if (drag.kind === "tile") {
       setOrigin({
         x: drag.originalOrigin.x + point.x - drag.anchor.x,
@@ -1084,6 +1103,9 @@ export function LayoutPlanner() {
       return;
     }
     if (!drag) return;
+    if (drag.kind === "room-tap") {
+      setDraftRoom((current) => [...current, drag.current]);
+    }
     if (drag.kind === "draw" && distance(drag.start, drag.current) >= 3) {
       snapshot();
       const rawNext: DrawItem = { id: uid(), type: tool === "opening" ? "opening" : "wall", start: drag.start, end: drag.current, thickness: wallThickness };
