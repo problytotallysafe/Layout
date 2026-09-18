@@ -13,6 +13,9 @@ import { isSupabaseConfigured } from "@/lib/supabase/client";
 import { SuiteAccountButton } from "@/components/suite-account";
 import {
   constrainPointToPolygon,
+  constrainPointToPolygonInset,
+  constrainSegmentToPolygonInset,
+  constrainSegmentTranslationToPolygonInset,
   endpointAtAngle,
   nearestSnapPoint,
   roundToIncrement,
@@ -172,6 +175,23 @@ const constrainWallToBounds = (item: DrawItem, bounds: Bounds): DrawItem => item
   start: clampWallPoint(item.start, item.thickness, bounds),
   end: clampWallPoint(item.end, item.thickness, bounds),
 } : item;
+const constrainWallPointToRoom = (point: Point, thickness: number, room: Point[], bounds: Bounds) =>
+  constrainPointToPolygonInset(
+    clampWallPoint(constrainPointToPolygon(point, room), thickness, bounds),
+    room,
+    thickness / 2,
+  );
+const constrainWallToRoom = (item: DrawItem, room: Point[], bounds: Bounds): DrawItem => {
+  if (item.type !== "wall") return item;
+  const bounded = constrainWallToBounds(item, bounds);
+  const segment = constrainSegmentToPolygonInset(
+    bounded.start,
+    bounded.end,
+    room,
+    bounded.thickness / 2,
+  );
+  return { ...bounded, start: segment.start, end: segment.end };
+};
 const constrainWallTranslation = (item: DrawItem, dx: number, dy: number, bounds: Bounds) => {
   if (item.type !== "wall") return { dx, dy };
   const halfThickness = item.thickness / 2;
@@ -181,9 +201,15 @@ const constrainWallTranslation = (item: DrawItem, dx: number, dy: number, bounds
   const maxDy = bounds.maxY - halfThickness - Math.max(item.start.y, item.end.y);
   return { dx: clamp(dx, minDx, maxDx), dy: clamp(dy, minDy, maxDy) };
 };
+const constrainWallTranslationToRoom = (item: DrawItem, dx: number, dy: number, room: Point[], bounds: Bounds) => {
+  const bounded = constrainWallTranslation(item, dx, dy, bounds);
+  return item.type === "wall"
+    ? constrainSegmentTranslationToPolygonInset(item.start, item.end, bounded.dx, bounded.dy, room, item.thickness / 2)
+    : bounded;
+};
 const reconcileItemsWithRoom = (items: DrawItem[], nextRoom: Point[]) => {
   const nextBounds = roomBounds(nextRoom);
-  let next = items.map((item) => item.type === "wall" ? constrainWallToBounds(item, nextBounds) : item);
+  let next = items.map((item) => item.type === "wall" ? constrainWallToRoom(item, nextRoom, nextBounds) : item);
   next.filter((item) => item.type === "wall").forEach((wall) => {
     next = reflowWallHostedOpenings(next, wall.id, wall);
   });
@@ -632,7 +658,7 @@ export function LayoutPlanner() {
             ...layout,
             id: layout.id as string,
             room: restoredRoom,
-            items: (layout.items || []).map((item) => constrainWallToBounds(item, restoredBounds)),
+            items: (layout.items || []).map((item) => constrainWallToRoom(item, restoredRoom, restoredBounds)),
           } as SavedLayout;
         }) : [];
         if (!layouts.length) {
@@ -645,7 +671,7 @@ export function LayoutPlanner() {
               ...migrated,
               ...legacy,
               room: restoredRoom,
-              items: (legacy.items || []).map((item) => constrainWallToBounds(item, roomBounds(restoredRoom))),
+              items: (legacy.items || []).map((item) => constrainWallToRoom(item, restoredRoom, roomBounds(restoredRoom))),
             }];
           } else layouts = [blankLayout()];
         }
@@ -978,7 +1004,7 @@ export function LayoutPlanner() {
     setSelectedRoomEdge(null);
     const rawPoint = pointerPoint(event);
     const roomPoint = constrainPointToPolygon(rawPoint, room);
-    const point = tool === "wall" ? clampWallPoint(roomPoint, wallThickness, bounds) : rawPoint;
+    const point = tool === "wall" ? constrainWallPointToRoom(roomPoint, wallThickness, room, bounds) : rawPoint;
     if (tool === "pan") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setDrag({ kind: "pan", clientX: event.clientX, clientY: event.clientY, origin: pan });
@@ -1026,7 +1052,7 @@ export function LayoutPlanner() {
     }
     const rawPoint = pointerPoint(event);
     const roomPoint = constrainPointToPolygon(rawPoint, room);
-    const point = drag.kind === "draw" && tool === "wall" ? clampWallPoint(roomPoint, wallThickness, bounds) : rawPoint;
+    const point = drag.kind === "draw" && tool === "wall" ? constrainWallPointToRoom(roomPoint, wallThickness, room, bounds) : rawPoint;
     if (drag.kind === "room-tap") {
       const previous = draftRoom.at(-1);
       const closeToStart = draftRoom.length >= 3
@@ -1055,11 +1081,14 @@ export function LayoutPlanner() {
       const nearby = snapEnabled && !event.altKey
         ? nearestSnapPoint(point, candidates, 3)
         : { point, snapped: false };
-      const snapped = nearby.snapped
+      const rawSnapped = nearby.snapped
         ? nearby.point
         : snapEnabled && !event.altKey
           ? snapToCommonAngle(drag.start, point)
           : point;
+      const snapped = tool === "wall"
+        ? constrainSegmentToPolygonInset(drag.start, rawSnapped, room, wallThickness / 2).end
+        : rawSnapped;
       setDrag({ ...drag, current: snapped });
       return;
     }
@@ -1078,7 +1107,9 @@ export function LayoutPlanner() {
           return current.map((item) => item.id === moving.id ? updated : item);
         }
         const original = { ...moving, start: drag.originalStart, end: drag.originalEnd };
-        const delta = constrainWallTranslation(original, requestedDx, requestedDy, bounds);
+        const delta = moving.type === "wall"
+          ? constrainWallTranslationToRoom(original, requestedDx, requestedDy, room, bounds)
+          : constrainWallTranslation(original, requestedDx, requestedDy, bounds);
         const updated = {
           ...moving,
           start: { x: drag.originalStart.x + delta.dx, y: drag.originalStart.y + delta.dy },
@@ -1103,11 +1134,14 @@ export function LayoutPlanner() {
       const nearby = snapEnabled && !event.altKey
         ? nearestSnapPoint(boundedPoint, candidates, 3)
         : { point: boundedPoint, snapped: false };
-      const snapped = nearby.snapped
+      const rawSnapped = nearby.snapped
         ? nearby.point
         : snapEnabled && !event.altKey
           ? snapToCommonAngle(other, boundedPoint)
           : boundedPoint;
+      const snapped = item.type === "wall"
+        ? constrainSegmentToPolygonInset(other, rawSnapped, room, item.thickness / 2).end
+        : rawSnapped;
       let updated: DrawItem = { ...item, [drag.endpoint]: snapped };
       if (item.type === "opening" && (item.hostId || item.hostEdgeIndex != null)) {
         updated = moveHostedOpening(
@@ -1142,7 +1176,7 @@ export function LayoutPlanner() {
       const rawNext: DrawItem = { id: uid(), type: tool === "opening" ? "opening" : "wall", start: drag.start, end: drag.current, thickness: wallThickness };
       const next = rawNext.type === "opening"
         ? attachOpeningToNearestHost(rawNext, items, room)
-        : constrainWallToBounds(rawNext, bounds);
+        : constrainWallToRoom(rawNext, room, bounds);
       setItems((current) => [...current, next]);
       setSelectedId(next.id);
       setTool("select");
@@ -1225,10 +1259,13 @@ export function LayoutPlanner() {
         x: item.start.x + (item.end.x - item.start.x) * scale,
         y: item.start.y + (item.end.y - item.start.y) * scale,
       };
-      const polygonEnd = item.type === "wall" ? constrainPointToPolygon(rawEnd, room) : rawEnd;
+      const wallSegment = item.type === "wall"
+        ? constrainSegmentToPolygonInset(item.start, rawEnd, room, item.thickness / 2)
+        : null;
       let updated: DrawItem = {
         ...item,
-        end: item.type === "wall" ? clampWallPoint(polygonEnd, item.thickness, bounds) : polygonEnd,
+        start: wallSegment?.start ?? item.start,
+        end: wallSegment?.end ?? rawEnd,
       };
       if (item.type === "opening" && (item.hostId || item.hostEdgeIndex != null)) {
         updated = moveHostedOpening(updated, current, room, {
@@ -1259,7 +1296,7 @@ export function LayoutPlanner() {
       const item = current.find((candidate) => candidate.id === selected.id);
       if (!item) return current;
       const updated = item.type === "wall"
-        ? constrainWallToBounds({ ...item, thickness: value }, bounds)
+        ? constrainWallToRoom({ ...item, thickness: value }, room, bounds)
         : { ...item, thickness: value };
       return item.type === "wall"
         ? reflowWallHostedOpenings(current, item.id, updated)
@@ -1274,12 +1311,13 @@ export function LayoutPlanner() {
       const item = current.find((candidate) => candidate.id === selected.id);
       if (!item) return current;
       const rawEnd = endpointAtAngle(item.start, distance(item.start, item.end), degrees);
-      const polygonEnd = item.type === "wall" ? constrainPointToPolygon(rawEnd, room) : rawEnd;
+      const wallSegment = item.type === "wall"
+        ? constrainSegmentToPolygonInset(item.start, rawEnd, room, item.thickness / 2)
+        : null;
       const updated: DrawItem = {
         ...item,
-        end: item.type === "wall"
-          ? clampWallPoint(polygonEnd, item.thickness, bounds)
-          : polygonEnd,
+        start: wallSegment?.start ?? item.start,
+        end: wallSegment?.end ?? rawEnd,
         ...(item.type === "opening"
           ? { hostId: undefined, hostEdgeIndex: undefined, hostT: undefined }
           : {}),
@@ -1431,10 +1469,11 @@ export function LayoutPlanner() {
       setItems((current) => {
         const wall = current.find((item) => item.id === dimensionedWall.id);
         if (!wall) return current;
+        const safeDelta = constrainWallTranslationToRoom(wall, delta, 0, room, bounds);
         const updated = {
           ...wall,
-          start: { ...wall.start, x: wall.start.x + delta },
-          end: { ...wall.end, x: wall.end.x + delta },
+          start: { ...wall.start, x: wall.start.x + safeDelta.dx, y: wall.start.y + safeDelta.dy },
+          end: { ...wall.end, x: wall.end.x + safeDelta.dx, y: wall.end.y + safeDelta.dy },
         };
         return reflowWallHostedOpenings(current, wall.id, updated);
       });
@@ -1445,10 +1484,11 @@ export function LayoutPlanner() {
       setItems((current) => {
         const wall = current.find((item) => item.id === dimensionedWall.id);
         if (!wall) return current;
+        const safeDelta = constrainWallTranslationToRoom(wall, 0, delta, room, bounds);
         const updated = {
           ...wall,
-          start: { ...wall.start, y: wall.start.y + delta },
-          end: { ...wall.end, y: wall.end.y + delta },
+          start: { ...wall.start, x: wall.start.x + safeDelta.dx, y: wall.start.y + safeDelta.dy },
+          end: { ...wall.end, x: wall.end.x + safeDelta.dx, y: wall.end.y + safeDelta.dy },
         };
         return reflowWallHostedOpenings(current, wall.id, updated);
       });
