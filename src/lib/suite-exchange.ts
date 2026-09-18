@@ -30,6 +30,7 @@ type LayoutSettings = {
   rotation?: number;
   showTile?: boolean;
   snapEnabled?: boolean;
+  notes?: string;
 };
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -209,6 +210,7 @@ export function layoutToSuite(
         rotation: layout.rotation,
         showTile: layout.showTile,
         snapEnabled: layout.snapEnabled,
+        notes: layout.notes || undefined,
       },
     },
   };
@@ -299,6 +301,7 @@ export function suiteToLayout(input: unknown): {
       rotation: settings.rotation === 90 ? 90 : 0,
       showTile: settings.showTile !== false,
       snapEnabled: settings.snapEnabled !== false,
+      notes: typeof settings.notes === "string" ? settings.notes : "",
       suiteContext: {
         organizationId: parsed.value.project.organizationId,
         buildrProjectId: parsed.value.project.buildrProjectId || null,
