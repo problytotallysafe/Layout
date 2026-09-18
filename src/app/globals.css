@@ -59,7 +59,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .library-heading strong { color: var(--ink-deep); font-size: 1.25rem; }
 .library-close, .layout-card-actions button { display: grid; place-items: center; border: 1px solid var(--line); background: white; color: var(--ink); cursor: pointer; }
 .library-close { width: 36px; height: 36px; border-radius: 10px; }
-.library-name-field { display: grid; gap: 6px; margin-top: 15px; color: var(--muted); font-size: .72rem; font-weight: 700; }
+.library-meta-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 15px; }
+.library-name-field { display: grid; gap: 6px; color: var(--muted); font-size: .72rem; font-weight: 700; }
 .library-name-field input { width: 100%; min-height: 40px; padding: 9px 11px; border: 1px solid #d6dfda; border-radius: 10px; outline: 0; background: #fbfcfb; color: var(--ink-deep); font-size: .9rem; font-weight: 750; }
 .library-name-field input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(209,164,78,.15); }
 .new-layout-button { width: 100%; margin: 17px 0 10px; }
@@ -274,6 +275,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
   .mobile-tools button { min-height: 55px; color: #cad5d0; font-size: .62rem; }
   .mobile-tools button.active { background: var(--gold); color: var(--ink-deep); }
   .layout-library { padding: 16px; border-radius: 15px; }
+  .library-meta-fields { grid-template-columns: 1fr; }
   .library-utility-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .library-utility-actions button { min-height: 44px; }
   .reference-fields { grid-template-columns: 1fr; }
@@ -304,6 +306,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
   .print-header > div { display: grid; gap: 2px; }
   .print-header > div span { color: #8a7040; font-size: 9pt; font-weight: 800; letter-spacing: .12em; }
   .print-header > div strong { color: var(--ink-deep); font-size: 18pt; }
+  .print-header > div small { color: var(--muted); font-size: 9pt; font-weight: 700; }
   .print-header dl { display: grid; grid-template-columns: repeat(3, minmax(105px, 1fr)); gap: 7px 18px; margin: 0; }
   .print-header dl div { min-width: 0; display: grid; gap: 2px; }
   .print-header dt { color: var(--muted); font-size: 7pt; text-transform: uppercase; }
