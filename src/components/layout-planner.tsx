@@ -19,6 +19,7 @@ import {
   segmentAngleDegrees,
   snapToCommonAngle,
 } from "@/lib/layout-geometry";
+import { assessAxis, balancedOffset, type CutObstacle } from "@/lib/layout-engine";
 
 export type Point = { x: number; y: number };
 export type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
@@ -26,7 +27,6 @@ type Tool = "select" | "pan" | "floor" | "room" | "wall" | "opening";
 type MaterialUnit = "in" | "mm" | "cm";
 type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
 type LayoutPattern = "straight" | "half-offset" | "third-offset";
-type CutObstacle = { coordinate: number; side: "before" | "after" };
 type DragState =
   | { kind: "draw"; start: Point; current: Point }
   | { kind: "endpoint"; id: string; endpoint: "start" | "end" }
@@ -185,75 +185,6 @@ const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, i
   const next = room[(index + 1) % room.length];
   return point.x === next.x || point.y === next.y;
 });
-
-function cutAtBoundary(coordinate: number, tile: number, grout: number, rawOffset: number, side: CutObstacle["side"]) {
-  const pitch = tile + grout;
-  const phase = ((coordinate - rawOffset) % pitch + pitch) % pitch;
-  if (phase < 0.001 || phase >= tile - 0.001) return tile;
-  return side === "before" ? phase : tile - phase;
-}
-
-function assessAxis(
-  span: number,
-  tile: number,
-  grout: number,
-  rawOffset: number,
-  obstacles: CutObstacle[],
-  phaseOffsets: number[] = [0],
-) {
-  const phases = phaseOffsets.length ? phaseOffsets : [0];
-  const assessments = phases.map((phase) => {
-    const offset = rawOffset + phase;
-    const edges = edgeCuts(span, tile, grout, offset);
-    const obstacleCuts = obstacles.map((obstacle) =>
-      cutAtBoundary(obstacle.coordinate, tile, grout, offset, obstacle.side),
-    );
-    return {
-      left: edges.left,
-      right: edges.right,
-      minimum: Math.min(edges.left, edges.right, ...obstacleCuts),
-    };
-  });
-  return {
-    left: Math.min(...assessments.map((item) => item.left)),
-    right: Math.min(...assessments.map((item) => item.right)),
-    minimum: Math.min(...assessments.map((item) => item.minimum)),
-  };
-}
-
-function balancedOffset(
-  span: number,
-  tile: number,
-  grout: number,
-  obstacles: CutObstacle[],
-  phaseOffsets: number[] = [0],
-) {
-  const pitch = tile + grout;
-  let best = { offset: 0, score: -Infinity, left: 0, right: 0, minimum: 0 };
-  for (let offset = -pitch; offset <= 0; offset += 0.125) {
-    const assessment = assessAxis(span, tile, grout, offset, obstacles, phaseOffsets);
-    const score = assessment.minimum * 100 - Math.abs(assessment.left - assessment.right);
-    if (score > best.score) best = { offset, score, ...assessment };
-  }
-  return best;
-}
-
-function edgeCuts(span: number, tile: number, grout: number, rawOffset: number) {
-  const pitch = tile + grout;
-  const offset = ((rawOffset % pitch) + pitch) % pitch - pitch;
-  const intersections: { start: number; end: number }[] = [];
-  for (let start = offset; start < span; start += pitch) {
-    const visibleStart = Math.max(0, start);
-    const visibleEnd = Math.min(span, start + tile);
-    if (visibleEnd > visibleStart) intersections.push({ start: visibleStart, end: visibleEnd });
-  }
-  if (!intersections.length) return { left: 0, right: 0 };
-  const last = intersections[intersections.length - 1];
-  return {
-    left: intersections[0].end - intersections[0].start,
-    right: last.end - last.start,
-  };
-}
 
 function NumberField({ label, value, onChange, suffix, min = 0, step = 1 }: {
   label: string; value: number; onChange: (value: number) => void; suffix: string; min?: number; step?: number;
