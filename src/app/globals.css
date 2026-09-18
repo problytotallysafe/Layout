@@ -278,6 +278,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
   .mobile-tools { position: fixed; z-index: 30; left: 8px; right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); height: 68px; padding: 5px; display: grid; grid-template-columns: repeat(7, 1fr); border: 1px solid #3f5e53; border-radius: 17px; background: rgba(13,46,36,.97); box-shadow: 0 12px 32px rgba(5,25,18,.3); backdrop-filter: blur(10px); }
   .mobile-tools button { min-height: 55px; color: #cad5d0; font-size: .62rem; }
   .mobile-tools button.active { background: var(--gold); color: var(--ink-deep); }
+  .suite-return-bar { --suite-return-bottom: calc(84px + env(safe-area-inset-bottom)); left: 10px; right: 10px !important; }
+  .suite-return-bar button { min-height: 42px; }
   .layout-library { padding: 16px; border-radius: 15px; }
   .library-meta-fields { grid-template-columns: 1fr; }
   .library-utility-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
