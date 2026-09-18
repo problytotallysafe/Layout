@@ -179,7 +179,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .pattern-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; padding: 3px; border-radius: 10px; background: #eef2ef; }
 .pattern-options button { min-height: 34px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: .7rem; font-weight: 750; cursor: pointer; }
 .pattern-options button.active { background: white; color: var(--ink-deep); box-shadow: 0 1px 5px rgba(23,63,50,.12); }
-.appearance-field
 .appearance-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
 .appearance-options button { min-width: 0; padding: 6px 2px; border: 1px solid #dce3df; border-radius: 9px; background: white; color: var(--muted); font-size: .58rem; cursor: pointer; }
 .appearance-options button > span { display: block; width: 25px; height: 19px; margin: 0 auto 4px; border: 1px solid #c9d2cd; border-radius: 5px; background: rgba(209,180,119,.23); }
