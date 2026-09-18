@@ -186,21 +186,15 @@ function NumberField({ label, value, onChange, suffix, min = 0, step = 1, disabl
   label: string; value: number; onChange: (value: number) => void; suffix: string; min?: number; step?: number; disabled?: boolean;
 }) {
   const displayValue = Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
-  const [draft, setDraft] = useState(displayValue);
-
-  useEffect(() => {
-    setDraft(displayValue);
-  }, [displayValue]);
-
-  const commit = () => {
+  const commit = (input: HTMLInputElement) => {
     if (disabled) return;
-    const parsed = Number(draft);
+    const parsed = Number(input.value);
     if (!Number.isFinite(parsed) || parsed < min) {
-      setDraft(displayValue);
+      input.value = displayValue;
       return;
     }
     const next = Math.max(min, parsed);
-    setDraft(String(Number(next.toFixed(3))));
+    input.value = String(Number(next.toFixed(3)));
     if (Math.abs(next - value) > 0.0005) onChange(next);
   };
 
@@ -209,19 +203,19 @@ function NumberField({ label, value, onChange, suffix, min = 0, step = 1, disabl
       <span>{label}</span>
       <span className="number-input">
         <input
+          key={`${label}-${displayValue}-${disabled ? "disabled" : "editable"}`}
           aria-label={label}
           min={min}
           step={step}
           type="number"
           disabled={disabled}
-          value={draft}
+          defaultValue={displayValue}
           inputMode="decimal"
-          onChange={(event) => { if (!disabled) setDraft(event.target.value); }}
-          onBlur={commit}
+          onBlur={(event) => commit(event.currentTarget)}
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
             if (event.key === "Escape") {
-              setDraft(displayValue);
+              event.currentTarget.value = displayValue;
               event.currentTarget.blur();
             }
           }}
@@ -262,21 +256,16 @@ function LengthField({ label, value, onChange, min = 0, disabled = false }: {
   disabled?: boolean;
 }) {
   const rounded = Math.round(value * 8) / 8;
-  const [draft, setDraft] = useState(formatLength(rounded));
-
-  useEffect(() => {
-    setDraft(formatLength(rounded));
-  }, [rounded]);
-
-  const commit = () => {
+  const displayValue = formatLength(rounded);
+  const commit = (input: HTMLInputElement) => {
     if (disabled) return;
-    const parsed = parseLength(draft);
+    const parsed = parseLength(input.value);
     if (parsed == null || parsed < min) {
-      setDraft(formatLength(rounded));
+      input.value = displayValue;
       return;
     }
     const next = Math.round(parsed * 8) / 8;
-    setDraft(formatLength(next));
+    input.value = formatLength(next);
     if (Math.abs(next - value) > 0.0005) onChange(next);
   };
 
@@ -285,17 +274,17 @@ function LengthField({ label, value, onChange, min = 0, disabled = false }: {
       <span>{label}</span>
       <span className="number-input">
         <input
+          key={`${label}-${rounded}-${disabled ? "disabled" : "editable"}`}
           aria-label={label}
           disabled={disabled}
-          value={draft}
+          defaultValue={displayValue}
           inputMode="text"
           autoComplete="off"
-          onChange={(event) => { if (!disabled) setDraft(event.target.value); }}
-          onBlur={commit}
+          onBlur={(event) => commit(event.currentTarget)}
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
             if (event.key === "Escape") {
-              setDraft(formatLength(rounded));
+              event.currentTarget.value = displayValue;
               event.currentTarget.blur();
             }
           }}
