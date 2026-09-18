@@ -52,7 +52,7 @@ export async function saveCloudLayouts(layouts: SavedLayout[]) {
     const { error } = await supabase.from("layout_documents").upsert(safe.map((document) => ({
       id: document.id, owner_id: user.id, name: document.projectName, schema_version: "layout.plan.v1", revision: document.revision,
       organization_id: document.suiteContext?.organizationId ?? null, document, updated_at: new Date(document.updatedAt).toISOString(),
-    })), { onConflict: "id" });
+    })), { onConflict: "owner_id,id" });
     if (error) throw error;
   }
   return { cloudSaved: true, conflicts };
