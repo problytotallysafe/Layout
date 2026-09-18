@@ -1155,11 +1155,11 @@ export function LayoutPlanner() {
             {!saved ? "Saving" : { device: "Device saved", saving: "Syncing", saved: "Cloud saved", offline: "Offline · device saved", failed: "Sync failed · device saved", conflict: "Needs review" }[syncState]}
           </span>
           <button className="icon-button" onClick={() => { saveCurrentLayout(); setLibraryOpen(true); }} aria-label="Saved layouts" title="Saved layouts"><FolderOpen size={18} /></button>
-          <button className="icon-button" onClick={()=>importInputRef.current?.click()} aria-label="Import shared project" title="Import shared project"><Upload size={18}/></button>
-          <button className="icon-button" onClick={exportShared} aria-label="Export shared project" title="Export shared project"><Download size={18}/></button>
-          <button className="icon-button" onClick={returnToBuildr} aria-label="Return result to Buildr" title="Return result to Buildr"><ExternalLink size={18}/></button>
+          <button className="icon-button desktop-action" onClick={()=>importInputRef.current?.click()} aria-label="Import shared project" title="Import shared project"><Upload size={18}/></button>
+          <button className="icon-button desktop-action" onClick={exportShared} aria-label="Export shared project" title="Export shared project"><Download size={18}/></button>
+          <button className="icon-button desktop-action" onClick={returnToBuildr} aria-label="Return result to Buildr" title="Return result to Buildr"><ExternalLink size={18}/></button>
           <SuiteAccountButton />
-          <button className="icon-button" onClick={printLayout} aria-label="Print layout" title="Print layout"><Printer size={18} /></button>
+          <button className="icon-button desktop-action" onClick={printLayout} aria-label="Print layout" title="Print layout"><Printer size={18} /></button>
           <button className="icon-button" onClick={undo} disabled={!history.length} aria-label="Undo"><Undo2 size={18} /></button>
           <button className="icon-button" onClick={redo} disabled={!future.length} aria-label="Redo"><Redo2 size={18} /></button>
         </div>
@@ -1186,6 +1186,12 @@ export function LayoutPlanner() {
           </div>
           <label className="library-name-field"><span>Current layout name</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
           <button className="primary new-layout-button" onClick={createNewLayout}><Plus size={17} /> New layout</button>
+          <div className="library-utility-actions" aria-label="Layout actions">
+            <button onClick={() => importInputRef.current?.click()}><Upload size={16} /> Import</button>
+            <button onClick={exportShared}><Download size={16} /> Export</button>
+            <button onClick={printLayout}><Printer size={16} /> Print / PDF</button>
+            <button onClick={returnToBuildr}><ExternalLink size={16} /> Buildr</button>
+          </div>
           <div className="layout-list">
             {[...savedLayouts].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt - a.updatedAt).map((layout) => <article className={`layout-card ${layout.id === activeLayoutId ? "active" : ""} ${layout.archivedAt ? "archived" : ""}`} key={layout.id}>
               <button className="layout-open" onClick={() => openSavedLayout(layout.id)}>
