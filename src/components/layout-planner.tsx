@@ -212,12 +212,47 @@ const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, i
 function NumberField({ label, value, onChange, suffix, min = 0, step = 1, disabled = false }: {
   label: string; value: number; onChange: (value: number) => void; suffix: string; min?: number; step?: number; disabled?: boolean;
 }) {
+  const displayValue = Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
+  const [draft, setDraft] = useState(displayValue);
+
+  useEffect(() => {
+    setDraft(displayValue);
+  }, [displayValue]);
+
+  const commit = () => {
+    if (disabled) return;
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed) || parsed < min) {
+      setDraft(displayValue);
+      return;
+    }
+    const next = Math.max(min, parsed);
+    setDraft(String(Number(next.toFixed(3))));
+    if (Math.abs(next - value) > 0.0005) onChange(next);
+  };
+
   return (
     <label className="field">
       <span>{label}</span>
       <span className="number-input">
-        <input aria-label={label} min={min} step={step} type="number" disabled={disabled} value={Number.isInteger(value) ? value : Number(value.toFixed(3))}
-          onChange={(event) => { if (!disabled) onChange(Math.max(min, Number(event.target.value) || 0)); }} />
+        <input
+          aria-label={label}
+          min={min}
+          step={step}
+          type="number"
+          disabled={disabled}
+          value={draft}
+          inputMode="decimal"
+          onChange={(event) => { if (!disabled) setDraft(event.target.value); }}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") {
+              setDraft(displayValue);
+              event.currentTarget.blur();
+            }
+          }}
+        />
         <small>{suffix}</small>
       </span>
     </label>
