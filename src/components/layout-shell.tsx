@@ -74,6 +74,7 @@ function signature(layout: SavedLayout) {
     rotation: layout.rotation,
     showTile: layout.showTile,
     snapEnabled: layout.snapEnabled,
+    notes: layout.notes,
     archivedAt: layout.archivedAt,
   });
   let hash = 2166136261;
