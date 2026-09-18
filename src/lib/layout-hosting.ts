@@ -65,8 +65,12 @@ export function attachOpeningToNearestHost<T extends HostableItem>(
     }
   }
   if (!best || best.distance > tolerance) {
-    const { hostId: _hostId, hostEdgeIndex: _hostEdgeIndex, hostT: _hostT, ...free } = opening;
-    return free as T;
+    return {
+      ...opening,
+      hostId: undefined,
+      hostEdgeIndex: undefined,
+      hostT: undefined,
+    };
   }
 
   const length = distanceBetween(opening.start, opening.end);
