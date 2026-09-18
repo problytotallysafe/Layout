@@ -7,6 +7,8 @@ import {
   constrainSegmentToPolygonInset,
   constrainSegmentTranslationToPolygonInset,
   endpointAtAngle,
+  horizontalPolygonSpanAtY,
+  nearestGridIntersectionInsidePolygon,
   nearestSnapPoint,
   pointInPolygon,
   pointInPolygonInset,
@@ -15,6 +17,7 @@ import {
   segmentAngleDegrees,
   segmentProjectionFraction,
   snapToCommonAngle,
+  verticalPolygonSpanAtX,
 } from "../src/lib/layout-geometry.ts";
 
 test("pointer precision rounds to an eighth inch", () => {
@@ -134,4 +137,50 @@ test("limits whole-wall translation before it crosses the room boundary", () => 
     ),
     true,
   );
+});
+
+
+test("scanline references measure the actual angled perimeter", () => {
+  const room = [
+    { x: 0, y: 0 },
+    { x: 20, y: 0 },
+    { x: 10, y: 20 },
+  ];
+  assert.deepEqual(horizontalPolygonSpanAtY(room, 10, 10), { min: 5, max: 15 });
+  assert.deepEqual(verticalPolygonSpanAtX(room, 5, 5), { min: 0, max: 10 });
+});
+
+test("scanline references choose the local span inside concave rooms", () => {
+  const room = [
+    { x: 0, y: 0 },
+    { x: 12, y: 0 },
+    { x: 12, y: 4 },
+    { x: 4, y: 4 },
+    { x: 4, y: 12 },
+    { x: 0, y: 12 },
+  ];
+  assert.deepEqual(horizontalPolygonSpanAtY(room, 8, 2), { min: 0, max: 4 });
+  assert.deepEqual(horizontalPolygonSpanAtY(room, 2, 10), { min: 0, max: 12 });
+  assert.deepEqual(verticalPolygonSpanAtX(room, 8, 2), { min: 0, max: 4 });
+});
+
+test("reference cross stays on an equivalent grid intersection inside a concave room", () => {
+  const room = [
+    { x: 0, y: 0 },
+    { x: 12, y: 0 },
+    { x: 12, y: 4 },
+    { x: 4, y: 4 },
+    { x: 4, y: 12 },
+    { x: 0, y: 12 },
+  ];
+  const point = nearestGridIntersectionInsidePolygon(
+    room,
+    { x: 0, y: 0 },
+    2,
+    2,
+    { x: 8, y: 8 },
+  );
+  assert.equal(pointInPolygon(point, room), true);
+  assert.ok(Math.abs(point.x / 2 - Math.round(point.x / 2)) < 0.001);
+  assert.ok(Math.abs(point.y / 2 - Math.round(point.y / 2)) < 0.001);
 });
