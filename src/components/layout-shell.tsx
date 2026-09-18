@@ -225,26 +225,40 @@ export function LayoutShell() {
       if (savingReference.current) return false;
       savingReference.current = true;
       setSaving(true);
-      const result = await saveSuiteDrawingReference(
-        layout,
-        expectedOverride ?? mark.remoteRevision,
-      );
-      savingReference.current = false;
-      setSaving(false);
-      if (result.ok) {
-        writeMark(drawingId, {
-          remoteRevision: result.remoteRevision,
-          localSignature: currentSignature,
-        });
-        setConflict(null);
-        setMessage("Synced to Buildr");
-        return true;
+      try {
+        const result = await saveSuiteDrawingReference(
+          layout,
+          expectedOverride ?? mark.remoteRevision,
+        );
+        if (result.ok) {
+          writeMark(drawingId, {
+            remoteRevision: result.remoteRevision,
+            localSignature: currentSignature,
+          });
+          setConflict(null);
+          setMessage("Synced to Buildr");
+          return true;
+        }
+        if (result.conflict) {
+          setConflict({ ...result, drawingId, localLayout: layout });
+          setMessage(result.error);
+        } else {
+          setMessage(
+            result.authRequired
+              ? result.error
+              : "Couldn't sync this change. Your device copy is safe and Layout will retry when service is available.",
+          );
+        }
+        return false;
+      } catch {
+        setMessage(
+          "Couldn't sync this change. Your device copy is safe and Layout will retry when service is available.",
+        );
+        return false;
+      } finally {
+        savingReference.current = false;
+        setSaving(false);
       }
-      if (result.conflict) {
-        setConflict({ ...result, drawingId, localLayout: layout });
-      }
-      setMessage(result.error);
-      return false;
     },
     [],
   );
