@@ -187,3 +187,15 @@ export function moveHostedOpening<T extends HostableItem>(
     hostT: aligned.t,
   };
 }
+
+
+export function removeItemWithDependents<T extends HostableItem>(
+  items: T[],
+  id: string,
+): T[] {
+  const target = items.find((item) => item.id === id);
+  if (!target) return items;
+  return target.type === "wall"
+    ? items.filter((item) => item.id !== id && item.hostId !== id)
+    : items.filter((item) => item.id !== id);
+}
