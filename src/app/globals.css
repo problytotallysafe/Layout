@@ -182,7 +182,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .material-units { grid-template-columns: repeat(3, 1fr); }
 .material-kind button,
 .material-units button { min-height: 31px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: .76rem; font-weight: 750; text-transform: uppercase; cursor: pointer; }
-.material-units button.active { background: white; color: var(--ink-deep); box-shadow: 0 1px 5px rgba(23,63,50,.12); }
+.material-kind button.active, .material-units button.active { background: white; color: var(--ink-deep); box-shadow: 0 1px 5px rgba(23,63,50,.12); }
 .pattern-field, .appearance-field { display: grid; gap: 7px; margin-top: 13px; color: #54635c; font-size: .875rem; font-weight: 650; }
 .pattern-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; padding: 3px; border-radius: 10px; background: #eef2ef; }
 .pattern-options button { min-height: 34px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: .7rem; font-weight: 750; cursor: pointer; }
@@ -195,6 +195,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .appearance-options .appearance-stone > span { background: radial-gradient(circle at 25% 30%, #aaa192 0 5%, transparent 6%), radial-gradient(circle at 70% 65%, #bbb2a3 0 6%, transparent 7%), #d7d1c3; }
 .appearance-options .appearance-marble > span { background: linear-gradient(145deg, transparent 35%, #b9c5c1 36% 39%, transparent 40% 58%, #d4dcda 59% 62%, transparent 63%), #f0efeb; }
 .appearance-options .appearance-concrete > span { background: radial-gradient(circle at 25% 30%, #999d99 0 3%, transparent 4%), radial-gradient(circle at 70% 60%, #999d99 0 4%, transparent 5%), #c9cbc8; }
+.appearance-options .appearance-wood > span { background: linear-gradient(6deg, transparent 0 44%, rgba(126,92,51,.35) 45% 49%, transparent 50% 100%), #c8a978; }
 .button-row { gap: 8px; margin-top: 15px; }
 .primary, .secondary, .text-button, .delete-button, .favor-button { min-height: 40px; border-radius: 10px; border: 0; padding: 0 13px; font-weight: 750; font-size: .84rem; cursor: pointer; }
 .primary { flex: 1; background: var(--ink); color: white; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
