@@ -565,6 +565,7 @@ export function LayoutPlanner() {
     try {
       window.localStorage.setItem(LIBRARY_KEY, JSON.stringify(layouts));
       window.localStorage.setItem(ACTIVE_LAYOUT_KEY, activeId);
+      window.dispatchEvent(new CustomEvent("buildr:layout-saved", { detail: { activeId } }));
       setDeviceSaveFailed(false);
       return true;
     } catch {
