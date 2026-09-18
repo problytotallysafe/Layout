@@ -69,7 +69,7 @@ test("preserves originating Buildr estimate context from an imported suite recor
     buildrProjectId: null,
     importKey: "estimate:estimate_12345678",
     sourceEnvelope: envelope,
-  };
+  } as NonNullable<SavedLayout["suiteContext"]> & { sourceEnvelope: unknown };
 
   assert.deepEqual(await resolveBuildrReturnTarget(layout), {
     kind: "context",
