@@ -388,6 +388,12 @@ export function LayoutPlanner() {
     const addBoth = (target: CutObstacle[], coordinate: number) => {
       target.push({ coordinate, side: "before" }, { coordinate, side: "after" });
     };
+    room.forEach((point) => {
+      const x = point.x - bounds.minX;
+      const y = point.y - bounds.minY;
+      if (x > 0 && x < roomWidth) addBoth(nextX, x);
+      if (y > 0 && y < roomHeight) addBoth(nextY, y);
+    });
     items.forEach((item) => {
       const horizontal = Math.abs(item.end.x - item.start.x) >= Math.abs(item.end.y - item.start.y);
       if (item.type === "wall") {
@@ -420,7 +426,7 @@ export function LayoutPlanner() {
       xObstacles: nextX.filter(({ coordinate }) => coordinate > 0 && coordinate < roomWidth),
       yObstacles: nextY.filter(({ coordinate }) => coordinate > 0 && coordinate < roomHeight),
     };
-  }, [items, bounds.minX, bounds.minY, roomWidth, roomHeight]);
+  }, [items, room, bounds.minX, bounds.minY, roomWidth, roomHeight]);
   const xCuts = useMemo(() => balancedOffset(roomWidth, actualTileW, grout, xObstacles, patternPhasesX), [roomWidth, actualTileW, grout, xObstacles, patternPhasesX]);
   const yCuts = useMemo(() => balancedOffset(roomHeight, actualTileH, grout, yObstacles), [roomHeight, actualTileH, grout, yObstacles]);
   const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX), [roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX]);
