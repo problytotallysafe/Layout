@@ -60,6 +60,7 @@ function writeLayout(layout: SavedLayout) {
 function signature(layout: SavedLayout) {
   const normalized = JSON.stringify({
     projectName: layout.projectName,
+    roomName: layout.roomName,
     room: layout.room,
     items: layout.items,
     tileWidth: layout.tileWidth,
