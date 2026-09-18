@@ -1378,6 +1378,7 @@ export function LayoutPlanner() {
     stone: "url(#stone-fill)",
     marble: "url(#marble-fill)",
     concrete: "url(#concrete-fill)",
+    wood: "url(#wood-fill)",
   }[tileAppearance];
   const tileOpacity = tileAppearance === "transparent" ? .2 : .88;
   const materialMin = materialUnit === "in" ? 1 : materialUnit === "mm" ? 25.4 : 2.54;
