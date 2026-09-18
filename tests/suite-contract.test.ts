@@ -59,6 +59,47 @@ test("canonical fixture converts through Layout and preserves unsupported Floorp
   );
 });
 
+test("editing one suite room preserves unrelated rooms", async () => {
+  const input = JSON.parse(await readFile(fixture, "utf8"));
+  input.project.rooms.push({
+    id: "suite-fixture-room-2",
+    name: "Hall",
+    displayUnit: "ft-in",
+    origin: { x: 0, y: 0 },
+    entities: [
+      {
+        id: "hall-boundary",
+        kind: "room.boundary",
+        geometry: {
+          vertices: [
+            { x: 0, y: 0 },
+            { x: 1219.2, y: 0 },
+            { x: 1219.2, y: 2438.4 },
+            { x: 0, y: 2438.4 },
+          ],
+        },
+      },
+      {
+        id: "hall-unknown",
+        kind: "object.custom",
+        geometry: { x: 300, y: 400 },
+        metadata: { preserveMe: true },
+      },
+    ],
+    extensions: { keep: "unchanged" },
+  });
+
+  const imported = suiteToLayout(input);
+  assert.ok(imported.layout);
+  if (!imported.layout) return;
+  const exported = layoutToSuite(imported.layout);
+  assert.equal(exported.project.rooms.length, 2);
+  const hall = exported.project.rooms.find((room) => room.id === "suite-fixture-room-2");
+  assert.ok(hall);
+  assert.equal(hall?.extensions?.keep, "unchanged");
+  assert.equal(hall?.entities.some((entity) => entity.id === "hall-unknown"), true);
+});
+
 test("newer shared records open safely read-only", () => {
   const envelope = createSuiteEnvelope(project, "floorplan", "2.0.0");
   envelope.schemaVersion = "2.0.0";
