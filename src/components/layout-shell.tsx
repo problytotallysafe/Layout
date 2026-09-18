@@ -158,14 +158,14 @@ export function LayoutShell() {
 
   useEffect(() => {
     const initial = window.setTimeout(refresh, 0);
-    const timer = window.setInterval(refresh, 900);
     const authChanged = () => setPlannerKey((value) => value + 1);
     window.addEventListener("buildr:auth-change", authChanged);
+    window.addEventListener("buildr:layout-saved", refresh);
     window.addEventListener("storage", refresh);
     return () => {
       window.clearTimeout(initial);
-      window.clearInterval(timer);
       window.removeEventListener("buildr:auth-change", authChanged);
+      window.removeEventListener("buildr:layout-saved", refresh);
       window.removeEventListener("storage", refresh);
     };
   }, [refresh]);
@@ -329,7 +329,10 @@ export function LayoutShell() {
       );
       const layout = activeLayout();
       const linked = layout?.suiteContext as ExtendedContext | undefined;
-      if (!button || !linked?.suiteDrawingId) return;
+      const hasLinkedReturn = Boolean(
+        linked?.suiteDrawingId || linked?.buildrProjectId || linked?.sourceEnvelope,
+      );
+      if (!button || !hasLinkedReturn) return;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
