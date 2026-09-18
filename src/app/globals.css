@@ -177,7 +177,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .switch > span::after { content: ""; display: block; width: 17px; height: 17px; border-radius: 50%; background: white; transition: .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 .switch input:checked + span { background: var(--ink); }
 .switch input:checked + span::after { transform: translateX(17px); }
-.material-units { display: grid; grid-template-columns: repeat(3, 1fr); padding: 3px; border-radius: 10px; background: #eef2ef; }
+.material-kind, .material-units { display: grid; padding: 3px; border-radius: 10px; background: #eef2ef; }
+.material-kind { grid-template-columns: repeat(2, 1fr); margin-bottom: 8px; }
+.material-units { grid-template-columns: repeat(3, 1fr); }
+.material-kind button,
 .material-units button { min-height: 31px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: .76rem; font-weight: 750; text-transform: uppercase; cursor: pointer; }
 .material-units button.active { background: white; color: var(--ink-deep); box-shadow: 0 1px 5px rgba(23,63,50,.12); }
 .pattern-field, .appearance-field { display: grid; gap: 7px; margin-top: 13px; color: #54635c; font-size: .875rem; font-weight: 650; }
