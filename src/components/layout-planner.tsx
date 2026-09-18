@@ -251,6 +251,7 @@ export function LayoutPlanner() {
   ]);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedRoomEdge, setSelectedRoomEdge] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState>(null);
   const [tileWidth, setTileWidth] = useState(12);
   const [tileHeight, setTileHeight] = useState(24);
@@ -434,6 +435,7 @@ export function LayoutPlanner() {
     setNotes(layout.notes || "");
     setSuiteContext(layout.suiteContext);
     setSelectedId(null);
+    setSelectedRoomEdge(null);
     setDraftRoom([]);
     setTool("select");
     setZoom(1);
@@ -849,6 +851,7 @@ export function LayoutPlanner() {
 
   const startDrawing = (event: React.PointerEvent<SVGSVGElement>) => {
     if (pinchRef.current) return;
+    setSelectedRoomEdge(null);
     const rawPoint = pointerPoint(event);
     const roomPoint = constrainPointToPolygon(rawPoint, room);
     const point = tool === "wall" ? clampWallPoint(roomPoint, wallThickness, bounds) : rawPoint;
@@ -985,6 +988,7 @@ export function LayoutPlanner() {
     event.stopPropagation();
     snapshot();
     setSelectedId(item.id);
+    setSelectedRoomEdge(null);
     svgRef.current?.setPointerCapture(event.pointerId);
     setDrag({ kind: "item", id: item.id, anchor: clientPoint(event.clientX, event.clientY), originalStart: item.start, originalEnd: item.end });
   };
@@ -1052,6 +1056,37 @@ export function LayoutPlanner() {
       x: axis === "width" && point.x === b.maxX ? b.minX + value : point.x,
       y: axis === "height" && point.y === b.maxY ? b.minY + value : point.y,
     }));
+    const nextBounds = roomBounds(nextRoom);
+    setRoom(nextRoom);
+    setItems((current) => current.map((item) => constrainWallToBounds(item, nextBounds)));
+  };
+
+  const updateRoomEdgeLength = (value: number) => {
+    if (selectedRoomEdge == null || value <= 0 || !room[selectedRoomEdge]) return;
+    const start = room[selectedRoomEdge];
+    const nextIndex = (selectedRoomEdge + 1) % room.length;
+    const end = room[nextIndex];
+    if (isRectangle(room)) {
+      const horizontal = Math.abs(end.x - start.x) >= Math.abs(end.y - start.y);
+      resizeRectangle(horizontal ? "width" : "height", value);
+      return;
+    }
+    snapshot();
+    const nextPoint = endpointAtAngle(start, value, segmentAngleDegrees(start, end));
+    const nextRoom = room.map((point, index) => index === nextIndex ? nextPoint : point);
+    const nextBounds = roomBounds(nextRoom);
+    setRoom(nextRoom);
+    setItems((current) => current.map((item) => constrainWallToBounds(item, nextBounds)));
+  };
+
+  const updateRoomEdgeAngle = (degrees: number) => {
+    if (selectedRoomEdge == null || !room[selectedRoomEdge]) return;
+    const start = room[selectedRoomEdge];
+    const nextIndex = (selectedRoomEdge + 1) % room.length;
+    const end = room[nextIndex];
+    snapshot();
+    const nextPoint = endpointAtAngle(start, distance(start, end), degrees);
+    const nextRoom = room.map((point, index) => index === nextIndex ? nextPoint : point);
     const nextBounds = roomBounds(nextRoom);
     setRoom(nextRoom);
     setItems((current) => current.map((item) => constrainWallToBounds(item, nextBounds)));
