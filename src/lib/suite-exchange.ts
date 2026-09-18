@@ -28,6 +28,7 @@ type LayoutSettings = {
   originMm?: { x: number; y: number };
   rotation?: number;
   showTile?: boolean;
+  snapEnabled?: boolean;
 };
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -205,6 +206,7 @@ export function layoutToSuite(
         originMm: mmPoint(layout.origin),
         rotation: layout.rotation,
         showTile: layout.showTile,
+        snapEnabled: layout.snapEnabled,
       },
     },
   };
@@ -293,6 +295,7 @@ export function suiteToLayout(input: unknown): {
           : { x: 0, y: 0 },
       rotation: settings.rotation === 90 ? 90 : 0,
       showTile: settings.showTile !== false,
+      snapEnabled: settings.snapEnabled !== false,
       suiteContext: {
         organizationId: parsed.value.project.organizationId,
         buildrProjectId: parsed.value.project.buildrProjectId || null,
