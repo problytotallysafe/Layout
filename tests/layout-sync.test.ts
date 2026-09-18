@@ -7,7 +7,7 @@ function layout(name: string, revision = 1): SavedLayout {
   return { id: "layout_1", revision, updatedAt: Date.parse("2026-09-13T00:00:00Z"), projectName: name,
     room: [{ x: 0, y: 0 }, { x: 120, y: 0 }, { x: 120, y: 96 }], items: [], tileWidth: 12, tileHeight: 24,
     grout: .125, materialUnit: "in", tileAppearance: "transparent", wastePercent: 10, wallThickness: 4.5,
-    origin: { x: 0, y: 0 }, rotation: 0, showTile: true };
+    origin: { x: 0, y: 0 }, rotation: 0, showTile: true, snapEnabled: true };
 }
 
 test("equal-revision divergent layouts require a user choice", () => {
