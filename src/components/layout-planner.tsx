@@ -495,7 +495,6 @@ export function LayoutPlanner() {
   }, []);
 
   const applyLayout = useCallback((layout: SavedLayout) => {
-    const restoredBounds = roomBounds(layout.room);
     setProjectName(layout.projectName);
     setRoom(layout.room);
     setItems(reconcileItemsWithRoom(layout.items, layout.room));
