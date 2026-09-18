@@ -351,6 +351,7 @@ export function LayoutPlanner() {
   const [showTile, setShowTile] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [notes, setNotes] = useState("");
+  const [optimizationMessage, setOptimizationMessage] = useState<string | null>(null);
   const [suiteContext, setSuiteContext] = useState<LayoutData["suiteContext"]>();
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
@@ -499,6 +500,7 @@ export function LayoutPlanner() {
   const snapshot = useCallback(() => {
     setHistory((current) => [...current.slice(-29), currentSnapshot()]);
     setFuture([]);
+    setOptimizationMessage(null);
     setSaved(false);
   }, [currentSnapshot]);
 
@@ -1173,7 +1175,19 @@ export function LayoutPlanner() {
       yObstacles,
       patternRows,
     );
+    const deltaX = optimized.offset.x - origin.x;
+    const deltaY = optimized.offset.y - origin.y;
+    const improvement = optimized.minimum - minimumCut;
     setOrigin(optimized.offset);
+    if (improvement > 0.0625) {
+      setOptimizationMessage(
+        `Shifted reference ${formatLength(Math.abs(deltaX))} ${deltaX < 0 ? "left" : "right"} and ${formatLength(Math.abs(deltaY))} ${deltaY < 0 ? "up" : "down"}. Smallest planned cut improves from ${formatLength(minimumCut)} to ${formatLength(optimized.minimum)}.`,
+      );
+    } else {
+      setOptimizationMessage(
+        `This reference position is already close to the best balanced result. Smallest planned cut is about ${formatLength(optimized.minimum)}.`,
+      );
+    }
   };
   const favorOpening = () => {
     if (!selected || selected.type !== "opening") return;
@@ -1603,10 +1617,11 @@ export function LayoutPlanner() {
               {showTile && <rect x={bounds.minX - actualTileW} y={bounds.minY - actualTileH} width={roomWidth + actualTileW * 2} height={roomHeight + actualTileH * 2} fill="url(#tile-pattern)" clipPath="url(#room-clip)" />}
               {items.map((item) => { const isSelected = selectedId === item.id; return (
                 <g key={item.id} className={`plan-item ${item.type} ${isSelected ? "selected" : ""}`} onPointerDown={(event) => beginItemDrag(event, item)}>
+                  <line className="item-hit" x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} strokeWidth={Math.max(10, item.thickness + 5)} />
                   <line x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} strokeWidth={item.type === "wall" ? item.thickness : Math.max(2.25, item.thickness * .55)} />
                   {item.type === "opening" && <line className="opening-center" x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} />}
                   <text x={(item.start.x + item.end.x) / 2} y={(item.start.y + item.end.y) / 2 - item.thickness / 2 - 2}>{formatLength(distance(item.start, item.end))}</text>
-                  {isSelected && <><circle cx={item.start.x} cy={item.start.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "start")} /><circle cx={item.end.x} cy={item.end.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "end")} /></>}
+                  {isSelected && <><circle className="endpoint-handle" cx={item.start.x} cy={item.start.y} r="4" onPointerDown={(event) => beginEndpointDrag(event, item.id, "start")} /><circle className="endpoint-handle" cx={item.end.x} cy={item.end.y} r="4" onPointerDown={(event) => beginEndpointDrag(event, item.id, "end")} /></>}
                 </g>
               ); })}
               {showTile && <g className="chalk-guide" clipPath="url(#room-clip)" pointerEvents="none">
@@ -1794,6 +1809,7 @@ export function LayoutPlanner() {
               <small>{formatLength(startRightReference)} from right · {formatLength(startBottomReference)} from bottom</small>
             </div>
             <p>{cutWarning ? "A room boundary, wall, or opening creates a small planned cut. Optimize cuts, drag the reference cross, or nudge it precisely." : hasAngledBoundary ? "Angled room boundaries are included in the cut-depth calculation and optimization. Verify final field conditions and substrate geometry before setting material." : "The current material position avoids small cuts across the room boundaries, walls, and openings being checked."}</p>
+            {optimizationMessage && <div className="optimization-feedback"><Sparkles size={15} /><span>{optimizationMessage}</span></div>}
           </section>
 
           <section className="panel notes-panel">
