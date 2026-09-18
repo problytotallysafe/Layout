@@ -2,7 +2,7 @@ name: Suite foundation CI
 
 on:
   push:
-    branches: [feature/suite-foundation-20260913]
+    branches: [feature/suite-foundation-20260913, feature/layout-ux-audit-20260917]
   workflow_dispatch:
 
 permissions:
