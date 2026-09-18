@@ -196,6 +196,14 @@ const constrainWallTranslation = (item: DrawItem, dx: number, dy: number, bounds
   const maxDy = bounds.maxY - halfThickness - Math.max(item.start.y, item.end.y);
   return { dx: clamp(dx, minDx, maxDx), dy: clamp(dy, minDy, maxDy) };
 };
+const reconcileItemsWithRoom = (items: DrawItem[], nextRoom: Point[]) => {
+  const nextBounds = roomBounds(nextRoom);
+  let next = items.map((item) => item.type === "wall" ? constrainWallToBounds(item, nextBounds) : item);
+  next.filter((item) => item.type === "wall").forEach((wall) => {
+    next = reflowWallHostedOpenings(next, wall.id, wall);
+  });
+  return reflowRoomHostedOpenings(next, nextRoom);
+};
 const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, index) => {
   const next = room[(index + 1) % room.length];
   return point.x === next.x || point.y === next.y;
@@ -441,7 +449,7 @@ export function LayoutPlanner() {
     const restoredBounds = roomBounds(layout.room);
     setProjectName(layout.projectName);
     setRoom(layout.room);
-    setItems(layout.items.map((item) => constrainWallToBounds(item, restoredBounds)));
+    setItems(reconcileItemsWithRoom(layout.items, layout.room));
     setTileWidth(layout.tileWidth);
     setTileHeight(layout.tileHeight);
     setGrout(layout.grout);
