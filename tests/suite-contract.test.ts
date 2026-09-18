@@ -126,6 +126,7 @@ test("standalone hosted openings survive suite export and import", () => {
     tileHeight: 24,
     grout: 0.125,
     materialUnit: "in" as const,
+    materialType: "tile" as const,
     tileAppearance: "transparent" as const,
     pattern: "straight" as const,
     wastePercent: 10,
