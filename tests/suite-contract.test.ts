@@ -59,6 +59,91 @@ test("canonical fixture converts through Layout and preserves unsupported Floorp
   );
 });
 
+test("opening host metadata round-trips without erasing Floorplan wall references", async () => {
+  const input = JSON.parse(await readFile(fixture, "utf8"));
+  const imported = suiteToLayout(input);
+  assert.ok(imported.layout);
+  if (!imported.layout) return;
+
+  const opening = imported.layout.items.find((item) => item.id === "opening-1");
+  assert.ok(opening);
+  assert.equal(
+    Boolean(opening?.hostId || opening?.hostEdgeIndex != null),
+    true,
+  );
+
+  const exported = layoutToSuite(imported.layout);
+  const exportedOpening = exported.project.rooms[0].entities.find(
+    (entity) => entity.id === "opening-1",
+  );
+  assert.ok(exportedOpening);
+  assert.equal(exportedOpening?.geometry.wallId, "wall-1");
+  assert.equal(
+    Boolean(
+      exportedOpening?.geometry.layoutHostEdgeIndex != null ||
+      exportedOpening?.geometry.wallId,
+    ),
+    true,
+  );
+
+  const reimported = suiteToLayout(exported);
+  const reopened = reimported.layout?.items.find((item) => item.id === "opening-1");
+  assert.ok(reopened);
+  assert.equal(Boolean(reopened?.hostId || reopened?.hostEdgeIndex != null), true);
+});
+
+test("standalone hosted openings survive suite export and import", () => {
+  const layout = {
+    id: "layout-host-test",
+    revision: 2,
+    updatedAt: Date.now(),
+    projectName: "Hosted opening test",
+    room: [
+      { x: 0, y: 0 },
+      { x: 120, y: 0 },
+      { x: 120, y: 96 },
+      { x: 0, y: 96 },
+    ],
+    items: [
+      {
+        id: "wall-host",
+        type: "wall" as const,
+        start: { x: 60, y: 0 },
+        end: { x: 60, y: 96 },
+        thickness: 4.5,
+      },
+      {
+        id: "opening-hosted",
+        type: "opening" as const,
+        start: { x: 60, y: 30 },
+        end: { x: 60, y: 66 },
+        thickness: 4.5,
+        hostId: "wall-host",
+        hostT: 0.5,
+      },
+    ],
+    tileWidth: 12,
+    tileHeight: 24,
+    grout: 0.125,
+    materialUnit: "in" as const,
+    tileAppearance: "transparent" as const,
+    pattern: "straight" as const,
+    wastePercent: 10,
+    wallThickness: 4.5,
+    origin: { x: 0, y: 0 },
+    rotation: 0 as const,
+    showTile: true,
+    snapEnabled: true,
+    notes: "",
+  };
+
+  const exported = layoutToSuite(layout);
+  const reopened = suiteToLayout(exported);
+  const opening = reopened.layout?.items.find((item) => item.id === "opening-hosted");
+  assert.equal(opening?.hostId, "wall-host");
+  assert.ok(Math.abs((opening?.hostT ?? 0) - 0.5) < 0.001);
+});
+
 test("editing one suite room preserves unrelated rooms", async () => {
   const input = JSON.parse(await readFile(fixture, "utf8"));
   input.project.rooms.push({
