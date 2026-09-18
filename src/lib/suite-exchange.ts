@@ -140,7 +140,7 @@ function entityForItem(item: DrawItem, prior?: SuiteEntity): SuiteEntity {
           ) *
             180) /
           Math.PI,
-        wallId: item.hostId,
+        wallId: item.hostId ?? prior.geometry.wallId,
         layoutHostEdgeIndex: item.hostEdgeIndex,
         layoutHostT: item.hostT,
       },
@@ -157,7 +157,7 @@ function entityForItem(item: DrawItem, prior?: SuiteEntity): SuiteEntity {
       start: mmPoint(item.start),
       end: mmPoint(item.end),
       thickness: inchesToMm(item.thickness),
-      hostId: item.hostId,
+      hostId: item.hostId ?? prior?.geometry.hostId,
       hostEdgeIndex: item.hostEdgeIndex,
       hostT: item.hostT,
     },
