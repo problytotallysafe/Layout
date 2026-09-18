@@ -215,6 +215,12 @@ export function layoutToSuite(
     },
   };
 
+  const rooms = source
+    ? source.project.rooms.some((candidate) => candidate.id === room.id)
+      ? source.project.rooms.map((candidate) => candidate.id === room.id ? room : candidate)
+      : [...source.project.rooms, room]
+    : [room];
+
   const project: SuiteProject = {
     id: source?.project.id || layout.id,
     organizationId: organizationId ?? source?.project.organizationId ?? null,
@@ -227,7 +233,7 @@ export function layoutToSuite(
     createdAt:
       source?.project.createdAt || new Date(layout.updatedAt).toISOString(),
     modifiedAt: new Date(layout.updatedAt).toISOString(),
-    rooms: [room],
+    rooms,
     extensions: source?.project.extensions,
   };
   const envelope = createSuiteEnvelope(
