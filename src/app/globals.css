@@ -47,7 +47,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .header-actions { justify-content: flex-end; gap: 7px; }
 .save-state { display: flex; align-items: center; gap: 5px; color: #b8c4bf; font-size: .8rem; margin-right: 4px; }
 .save-state.is-saved { color: #d9c088; }
-.save-state.offline, .save-state.failed { color: #f0c2a8; }
+.save-state.offline, .save-state.failed, .save-state.device-error { color: #f0c2a8; }
 .save-state.conflict { color: #ffd88a; }
 .icon-button, .zoom-controls button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #48665b; border-radius: 9px; background: #173d31; color: white; cursor: pointer; }
 .icon-button:disabled { opacity: .35; cursor: default; }
@@ -132,7 +132,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 
 .dimensions line { stroke: #87958e; stroke-width: .4; stroke-dasharray: 1.5 1; }
 .dimensions rect { fill: white; stroke: #87958e; stroke-width: .45; }
-.dimensions text { fill: var(--ink); font-size: 3.25px; text-anchor: middle; font-weight: 700; }
+.dimensions text { fill: var(--ink); font-size: 3.25px; text-anchor: middle; font-weight: 700; pointer-events: none; }
+.dimension-edge { cursor: pointer; }
+.dimension-edge .dimension-hit { fill: transparent; stroke: transparent; pointer-events: all; }
+.dimension-edge:hover rect:not(.dimension-hit), .dimension-edge.selected rect:not(.dimension-hit) { fill: #fff8e6; stroke: var(--gold); stroke-width: .7; }
+.dimension-edge.selected text { fill: var(--ink-deep); font-weight: 850; }
 .plan-item { cursor: move; }
 .plan-item line { stroke: #243f35; stroke-linecap: square; }
 .plan-item.opening > line:first-child { stroke: white; }
@@ -215,6 +219,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 .start-reference-card { display: grid; gap: 3px; margin-top: 8px; padding: 10px; border: 1px solid #dbe6df; border-radius: 9px; background: #f3f8f5; }
 .start-reference-card span { color: var(--muted); font-size: .65rem; }
 .start-reference-card strong { color: var(--ink); font-size: .75rem; line-height: 1.35; }
+.start-reference-card small { color: var(--muted); font-size: .65rem; line-height: 1.4; }
+.reference-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 4px; }
+.reference-fields .field { margin-top: 0; font-size: .68rem; }
+.room-edge-done { width: 100%; margin-top: 8px; }
 .results-panel p, .install-panel p { margin: 12px 0 0; color: var(--muted); font-size: .73rem; line-height: 1.45; }
 .notes-panel textarea { width: 100%; min-height: 88px; resize: vertical; padding: 10px 11px; border: 1px solid #d6dfda; border-radius: 10px; outline: 0; background: #fbfcfb; color: var(--ink-deep); line-height: 1.45; }
 .notes-panel textarea:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(209,164,78,.15); }
@@ -258,6 +266,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
   .layout-library { padding: 16px; border-radius: 15px; }
   .library-utility-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .library-utility-actions button { min-height: 44px; }
+  .reference-fields { grid-template-columns: 1fr; }
 }
 @media (max-width: 390px) {
   .field-row { gap: 7px; }
