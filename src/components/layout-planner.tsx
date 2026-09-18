@@ -802,15 +802,49 @@ export function LayoutPlanner() {
   };
   const pointerPoint = (event: React.PointerEvent<SVGSVGElement>) => clientPoint(event.clientX, event.clientY);
 
-  const changeZoom = (nextZoom: number) => {
+  const changeZoom = (nextZoom: number, anchorClient?: Point) => {
     const clampedZoom = clamp(nextZoom, 0.75, 2.5);
-    const center = { x: pan.x + VIEW_W / zoom / 2, y: pan.y + VIEW_H / zoom / 2 };
+    const rect = svgRef.current?.getBoundingClientRect();
+    const currentVisible = { x: VIEW_W / zoom, y: VIEW_H / zoom };
     const nextVisible = { x: VIEW_W / clampedZoom, y: VIEW_H / clampedZoom };
-    setPan({
-      x: clamp(center.x - nextVisible.x / 2, 0, Math.max(0, VIEW_W - nextVisible.x)),
-      y: clamp(center.y - nextVisible.y / 2, 0, Math.max(0, VIEW_H - nextVisible.y)),
-    });
+    if (anchorClient && rect) {
+      const fractionX = clamp((anchorClient.x - rect.left) / rect.width, 0, 1);
+      const fractionY = clamp((anchorClient.y - rect.top) / rect.height, 0, 1);
+      const anchor = {
+        x: pan.x + fractionX * currentVisible.x,
+        y: pan.y + fractionY * currentVisible.y,
+      };
+      setPan({
+        x: clamp(anchor.x - fractionX * nextVisible.x, 0, Math.max(0, VIEW_W - nextVisible.x)),
+        y: clamp(anchor.y - fractionY * nextVisible.y, 0, Math.max(0, VIEW_H - nextVisible.y)),
+      });
+    } else {
+      const center = {
+        x: pan.x + currentVisible.x / 2,
+        y: pan.y + currentVisible.y / 2,
+      };
+      setPan({
+        x: clamp(center.x - nextVisible.x / 2, 0, Math.max(0, VIEW_W - nextVisible.x)),
+        y: clamp(center.y - nextVisible.y / 2, 0, Math.max(0, VIEW_H - nextVisible.y)),
+      });
+    }
     setZoom(clampedZoom);
+  };
+
+  const fitRoom = () => {
+    const margin = 10;
+    const width = Math.max(1, roomWidth + margin * 2);
+    const height = Math.max(1, roomHeight + margin * 2);
+    const nextZoom = clamp(Math.min(VIEW_W / width, VIEW_H / height), 0.75, 2.5);
+    const visibleW = VIEW_W / nextZoom;
+    const visibleH = VIEW_H / nextZoom;
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerY = (bounds.minY + bounds.maxY) / 2;
+    setZoom(nextZoom);
+    setPan({
+      x: clamp(centerX - visibleW / 2, 0, Math.max(0, VIEW_W - visibleW)),
+      y: clamp(centerY - visibleH / 2, 0, Math.max(0, VIEW_H - visibleH)),
+    });
   };
 
   const beginPointerTracking = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -1069,20 +1103,58 @@ export function LayoutPlanner() {
     setRoom(nextRoom);
     setItems((current) => current.map((item) => constrainWallToBounds(item, nextBounds)));
   };
-  const undo = () => {
+  const undo = useCallback(() => {
     const previous = history.at(-1);
     if (!previous) return;
     setFuture((current) => [currentSnapshot(), ...current]);
     setHistory((current) => current.slice(0, -1));
     restoreSnapshot(previous);
-  };
-  const redo = () => {
+  }, [currentSnapshot, history, restoreSnapshot]);
+  const redo = useCallback(() => {
     const next = future[0];
     if (!next) return;
     setHistory((current) => [...current.slice(-29), currentSnapshot()]);
     setFuture((current) => current.slice(1));
     restoreSnapshot(next);
-  };
+  }, [currentSnapshot, future, restoreSnapshot]);
+
+  useEffect(() => {
+    const keyboard = (event: KeyboardEvent) => {
+      const target = event.target;
+      const typing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+      if (typing) return;
+      const command = event.ctrlKey || event.metaKey;
+      if (command && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (command && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redo();
+        return;
+      }
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedId) {
+        event.preventDefault();
+        snapshot();
+        setItems((current) => current.filter((item) => item.id !== selectedId));
+        setSelectedId(null);
+        return;
+      }
+      if (event.key === "Escape") {
+        setSelectedId(null);
+        setDraftRoom([]);
+        setDrag(null);
+        setTool("select");
+      }
+    };
+    window.addEventListener("keydown", keyboard);
+    return () => window.removeEventListener("keydown", keyboard);
+  }, [redo, selectedId, snapshot, undo]);
 
   const roomPath = room.map((point) => `${point.x},${point.y}`).join(" ");
   const draftPath = draftRoom.map((point) => `${point.x},${point.y}`).join(" ");
@@ -1258,7 +1330,7 @@ export function LayoutPlanner() {
               <button onClick={() => changeZoom(zoom - 0.2)} aria-label="Zoom out"><ZoomOut size={17} /></button>
               <span>{Math.round(zoom * 100)}%</span>
               <button onClick={() => changeZoom(zoom + 0.2)} aria-label="Zoom in"><ZoomIn size={17} /></button>
-              <button className="fit-button" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} aria-label="Fit plan">Fit</button>
+              <button className="fit-button" onClick={fitRoom} aria-label="Fit room in view">Fit</button>
             </div>
           </div>
 
@@ -1267,7 +1339,7 @@ export function LayoutPlanner() {
               onPointerDownCapture={beginPointerTracking} onPointerMoveCapture={movePointerTracking}
               onPointerUpCapture={endPointerTracking} onPointerCancelCapture={endPointerTracking}
               onPointerDown={startDrawing} onPointerMove={movePointer} onPointerUp={endPointer} onPointerCancel={endPointer}
-              onWheel={(event) => { event.preventDefault(); changeZoom(zoom * (event.deltaY > 0 ? .9 : 1.1)); }}
+              onWheel={(event) => { event.preventDefault(); changeZoom(zoom * (event.deltaY > 0 ? .9 : 1.1), { x: event.clientX, y: event.clientY }); }}
               role="img" aria-label="Editable floor plan and tile layout">
               <defs>
                 <pattern id="minor-grid" width="3" height="3" patternUnits="userSpaceOnUse"><path d="M 3 0 L 0 0 0 3" fill="none" stroke="#d9dfdb" strokeWidth=".25" /></pattern>
