@@ -126,8 +126,8 @@ test("standalone hosted openings survive suite export and import", () => {
     tileHeight: 24,
     grout: 0.125,
     materialUnit: "in" as const,
-    materialType: "tile" as const,
-    tileAppearance: "transparent" as const,
+    materialType: "plank" as const,
+    tileAppearance: "wood" as const,
     pattern: "straight" as const,
     wastePercent: 10,
     wallThickness: 4.5,
@@ -143,6 +143,8 @@ test("standalone hosted openings survive suite export and import", () => {
   const opening = reopened.layout?.items.find((item) => item.id === "opening-hosted");
   assert.equal(opening?.hostId, "wall-host");
   assert.ok(Math.abs((opening?.hostT ?? 0) - 0.5) < 0.001);
+  assert.equal(reopened.layout?.materialType, "plank");
+  assert.equal(reopened.layout?.tileAppearance, "wood");
 });
 
 test("editing one suite room preserves unrelated rooms", async () => {
