@@ -67,6 +67,28 @@ export function assessAxis(
   };
 }
 
+export function assessObstacleCuts(
+  tile: number,
+  grout: number,
+  rawOffset: number,
+  obstacles: CutObstacle[],
+  phaseOffsets: number[] = [0],
+) {
+  if (!obstacles.length) return tile;
+  const phases = phaseOffsets.length ? phaseOffsets : [0];
+  let minimum = tile;
+  for (const phase of phases) {
+    const offset = rawOffset + phase;
+    for (const obstacle of obstacles) {
+      minimum = Math.min(
+        minimum,
+        cutAtBoundary(obstacle.coordinate, tile, grout, offset, obstacle.side),
+      );
+    }
+  }
+  return minimum;
+}
+
 export function balancedOffset(
   span: number,
   tile: number,
@@ -293,10 +315,6 @@ export function optimizePolygonLayout(
     { length: Math.max(1, Math.round(patternRows)) },
     (_, index) => index * pitchX / Math.max(1, Math.round(patternRows)),
   );
-  const roomBounds = boundsForPolygon(room);
-  const spanX = roomBounds.maxX - roomBounds.minX;
-  const spanY = roomBounds.maxY - roomBounds.minY;
-
   const evaluate = (offsetX: number, offsetY: number) => {
     const polygon = assessPolygonLayout(
       room,
@@ -306,9 +324,24 @@ export function optimizePolygonLayout(
       { x: boundsOrigin.x + offsetX, y: boundsOrigin.y + offsetY },
       patternRows,
     );
-    const x = assessAxis(spanX, tileWidth, grout, offsetX, xObstacles, phasesX);
-    const y = assessAxis(spanY, tileHeight, grout, offsetY, yObstacles);
-    const minimum = Math.min(polygon.minimumBoundaryCut, x.minimum, y.minimum);
+    const xObstacleCut = assessObstacleCuts(
+      tileWidth,
+      grout,
+      offsetX,
+      xObstacles,
+      phasesX,
+    );
+    const yObstacleCut = assessObstacleCuts(
+      tileHeight,
+      grout,
+      offsetY,
+      yObstacles,
+    );
+    const minimum = Math.min(
+      polygon.minimumBoundaryCut,
+      xObstacleCut,
+      yObstacleCut,
+    );
     return {
       offset: { x: offsetX, y: offsetY },
       minimum,
@@ -316,8 +349,7 @@ export function optimizePolygonLayout(
       score:
         minimum * 1000 +
         polygon.minimumAreaRatio * 10 -
-        Math.abs(x.left - x.right) * 0.1 -
-        Math.abs(y.left - y.right) * 0.1,
+        Math.hypot(offsetX, offsetY) * 0.001,
     };
   };
 
