@@ -404,10 +404,11 @@ export function LayoutShell() {
       <LayoutPlanner key={plannerKey} />
       {(message || hasBuildrReturn) && (
         <div
+          className="suite-return-bar"
           style={{
             position: "fixed",
             right: 12,
-            bottom: 12,
+            bottom: "var(--suite-return-bottom, 12px)",
             zIndex: 800,
             display: "flex",
             gap: 8,
