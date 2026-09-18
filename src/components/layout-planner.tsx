@@ -1162,6 +1162,16 @@ export function LayoutPlanner() {
   const startRightReference = Math.max(0, bounds.maxX - startX);
   const startTopReference = Math.max(0, startY - bounds.minY);
   const startBottomReference = Math.max(0, bounds.maxY - startY);
+  const setReferenceOffset = (axis: "x" | "y", value: number) => {
+    snapshot();
+    if (axis === "x") {
+      const target = clamp(bounds.minX + value, bounds.minX, bounds.maxX);
+      setOrigin((current) => ({ ...current, x: current.x + target - startX }));
+    } else {
+      const target = clamp(bounds.minY + value, bounds.minY, bounds.maxY);
+      setOrigin((current) => ({ ...current, y: current.y + target - startY }));
+    }
+  };
   const guideWallOrientation = dimensionedWall
     ? Math.abs(dimensionedWall.end.x - dimensionedWall.start.x) < 1
       ? "vertical"
@@ -1480,10 +1490,18 @@ export function LayoutPlanner() {
             {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure from both room borders to the nearest wall face. Use the fields above to enter an exact offset. The guides are visible only while this wall is selected.</p>}
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
             <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); setSelectedId(null); }}>Delete {selected.type}</button>
+          </section> : selectedEdgeStart && selectedEdgeEnd && selectedRoomEdge != null ? <section className="panel selected-panel">
+            <div className="panel-heading"><span className="eyebrow">Selected dimension</span><strong>Room edge {selectedRoomEdge + 1}</strong></div>
+            <div className="field-row">
+              <NumberField label="Length" value={distance(selectedEdgeStart, selectedEdgeEnd)} onChange={updateRoomEdgeLength} suffix="in" min={1} step={.125} />
+              <NumberField label="Angle" value={segmentAngleDegrees(selectedEdgeStart, selectedEdgeEnd)} onChange={updateRoomEdgeAngle} suffix="°" min={0} step={1} />
+            </div>
+            <p className="selection-hint">{isRectangle(room) ? "Changing this edge length resizes the rectangle while keeping opposite sides aligned. Changing the angle converts the room to a custom shape." : "Length moves the next corner along this wall direction. Angle rotates this wall around its first corner. Verify adjacent dimensions after changing a custom shape."}</p>
+            <button className="text-button room-edge-done" onClick={() => setSelectedRoomEdge(null)}>Done</button>
           </section> : <section className="panel">
             <div className="panel-heading"><span className="eyebrow">Room</span><strong>{isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom shape"}</strong></div>
             {isRectangle(room) && <div className="field-row"><NumberField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} suffix="in" min={24} /><NumberField label="Length" value={roomHeight} onChange={(value) => resizeRectangle("height", value)} suffix="in" min={24} /></div>}
-            <NumberField label="New wall thickness" value={wallThickness} onChange={setWallThickness} suffix="in" min={1} step={.5} />
+            <NumberField label="New wall thickness" value={wallThickness} onChange={(value) => { snapshot(); setWallThickness(value); }} suffix="in" min={1} step={.5} />
           </section>}
 
           <section className="panel tile-panel">
