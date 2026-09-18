@@ -6,6 +6,19 @@ function reduceFraction(numerator: number, denominator: number) {
   return [numerator / divisor, denominator / divisor] as const;
 }
 
+export function formatInchesInput(inches: number, denominator = 16) {
+  const precision = Number.isFinite(denominator) && denominator > 0 ? Math.round(denominator) : 16;
+  const sign = inches < 0 ? "-" : "";
+  const units = Math.round(Math.abs(inches) * precision);
+  const whole = Math.floor(units / precision);
+  const remainder = units % precision;
+  if (!remainder) return `${sign}${whole}`;
+  const [numerator, reducedDenominator] = reduceFraction(remainder, precision);
+  return whole
+    ? `${sign}${whole} ${numerator}/${reducedDenominator}`
+    : `${sign}${numerator}/${reducedDenominator}`;
+}
+
 export function formatLength(inches: number) {
   const sign = inches < 0 ? "-" : "";
   const eighths = Math.max(0, Math.round(Math.abs(inches) * 8));
