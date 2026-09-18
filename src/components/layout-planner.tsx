@@ -269,6 +269,7 @@ export function LayoutPlanner() {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [saved, setSaved] = useState(true);
+  const [deviceSaveFailed, setDeviceSaveFailed] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>("device");
   const [conflicts, setConflicts] = useState<LayoutConflict[]>([]);
   const [activeLayoutId, setActiveLayoutId] = useState<string | null>(null);
@@ -444,8 +445,16 @@ export function LayoutPlanner() {
   const persistLibrary = useCallback((layouts: SavedLayout[], activeId: string) => {
     savedLayoutsRef.current = layouts;
     setSavedLayouts(layouts);
-    window.localStorage.setItem(LIBRARY_KEY, JSON.stringify(layouts));
-    window.localStorage.setItem(ACTIVE_LAYOUT_KEY, activeId);
+    try {
+      window.localStorage.setItem(LIBRARY_KEY, JSON.stringify(layouts));
+      window.localStorage.setItem(ACTIVE_LAYOUT_KEY, activeId);
+      setDeviceSaveFailed(false);
+      return true;
+    } catch {
+      setDeviceSaveFailed(true);
+      setSaved(false);
+      return false;
+    }
   }, []);
 
   const saveCurrentLayout = useCallback(() => {
@@ -477,16 +486,22 @@ export function LayoutPlanner() {
     const next = existingIndex >= 0
       ? savedLayoutsRef.current.map((layout) => layout.id === activeLayoutId ? document : layout)
       : [document, ...savedLayoutsRef.current];
-    persistLibrary(next, activeLayoutId);
-    window.localStorage.setItem(LEGACY_DRAFT_KEY, JSON.stringify(document));
+    if (!persistLibrary(next, activeLayoutId)) return null;
+    try {
+      window.localStorage.setItem(LEGACY_DRAFT_KEY, JSON.stringify(document));
+    } catch {
+      // The primary library write succeeded; the legacy recovery copy is best-effort only.
+    }
     setSaved(true);
     return document;
   }, [activeLayoutId, grout, items, materialUnit, notes, origin, pattern, persistLibrary, projectName, room, rotation, showTile, snapEnabled, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      let recoveryRaw: string | null = null;
       try {
         const storedLibrary = window.localStorage.getItem(LIBRARY_KEY);
+        recoveryRaw = storedLibrary;
         const parsedLibrary = storedLibrary ? JSON.parse(storedLibrary) as Partial<SavedLayout>[] : [];
         let layouts = Array.isArray(parsedLibrary) ? parsedLibrary.filter((layout) => layout.id && layout.room?.length && Array.isArray(layout.items)).map((layout) => {
           const defaults = blankLayout(layout.id, layout.projectName || "Untitled layout");
@@ -520,6 +535,13 @@ export function LayoutPlanner() {
         setActiveLayoutId(active.id);
         applyLayout(active);
       } catch {
+        if (recoveryRaw) {
+          try {
+            window.localStorage.setItem(`layout-library-recovery-${Date.now()}`, recoveryRaw);
+          } catch {
+            // If storage itself is unavailable, keep the in-memory fallback and surface the save failure.
+          }
+        }
         const fallback = blankLayout();
         persistLibrary([fallback], fallback.id);
         setActiveLayoutId(fallback.id);
@@ -611,11 +633,11 @@ export function LayoutPlanner() {
     saveCurrentLayout();
     const nextLayout = blankLayout();
     const next = [nextLayout, ...savedLayoutsRef.current];
-    persistLibrary(next, nextLayout.id);
+    const stored = persistLibrary(next, nextLayout.id);
     setActiveLayoutId(nextLayout.id);
     applyLayout(nextLayout);
     setLibraryOpen(false);
-    setSaved(true);
+    setSaved(stored);
   };
 
   const openSavedLayout = (id: string) => {
@@ -623,10 +645,10 @@ export function LayoutPlanner() {
     const layout = savedLayoutsRef.current.find((candidate) => candidate.id === id);
     if (!layout) return;
     setActiveLayoutId(layout.id);
-    window.localStorage.setItem(ACTIVE_LAYOUT_KEY, layout.id);
+    const stored = persistLibrary(savedLayoutsRef.current, layout.id);
     applyLayout(layout);
     setLibraryOpen(false);
-    setSaved(true);
+    setSaved(stored);
   };
 
   const duplicateSavedLayout = (id: string) => {
@@ -644,11 +666,11 @@ export function LayoutPlanner() {
       updatedAt: Date.now(),
     };
     const next = [duplicate, ...savedLayoutsRef.current];
-    persistLibrary(next, duplicate.id);
+    const stored = persistLibrary(next, duplicate.id);
     setActiveLayoutId(duplicate.id);
     applyLayout(duplicate);
     setLibraryOpen(false);
-    setSaved(true);
+    setSaved(stored);
   };
 
   const deleteSavedLayout = (id: string) => {
@@ -657,7 +679,7 @@ export function LayoutPlanner() {
     let next = savedLayoutsRef.current.filter((layout) => layout.id !== id);
     if (!next.length) next = [blankLayout()];
     const nextActive = id === activeLayoutId ? next[0] : next.find((layout) => layout.id === activeLayoutId) || next[0];
-    persistLibrary(next, nextActive.id);
+    const stored = persistLibrary(next, nextActive.id);
     queueCloudDeletion(id);
     if (navigator.onLine) void flushCloudDeletions().then((complete) => {
       if (!complete) setSyncState("failed");
@@ -666,7 +688,7 @@ export function LayoutPlanner() {
       setActiveLayoutId(nextActive.id);
       applyLayout(nextActive);
     }
-    setSaved(true);
+    setSaved(stored);
   };
 
   const toggleArchivedLayout = (id: string) => {
@@ -685,10 +707,10 @@ export function LayoutPlanner() {
       nextActive = blankLayout();
       next.unshift(nextActive);
     }
-    persistLibrary(next, nextActive.id);
+    const stored = persistLibrary(next, nextActive.id);
     setActiveLayoutId(nextActive.id);
     applyLayout(nextActive);
-    setSaved(true);
+    setSaved(stored);
     if (navigator.onLine) void saveCloudLayouts([changed]).then((result) => {
       setSyncState(result.conflicts.length ? "conflict" : result.cloudSaved ? "saved" : "device");
     }).catch(() => setSyncState("failed"));
@@ -1164,9 +1186,9 @@ export function LayoutPlanner() {
           <ChevronDown size={15} aria-hidden="true" />
         </label>
         <div className="header-actions">
-          <span className={`save-state ${saved && syncState === "saved" ? "is-saved" : ""} ${syncState}`}>
-            {syncState === "offline" || syncState === "failed" ? <CloudOff size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
-            {!saved ? "Saving" : { device: "Device saved", saving: "Syncing", saved: "Cloud saved", offline: "Offline · device saved", failed: "Sync failed · device saved", conflict: "Needs review" }[syncState]}
+          <span className={`save-state ${saved && syncState === "saved" && !deviceSaveFailed ? "is-saved" : ""} ${syncState} ${deviceSaveFailed ? "device-error" : ""}`}>
+            {deviceSaveFailed || syncState === "offline" || syncState === "failed" ? <CloudOff size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
+            {deviceSaveFailed ? "Device save failed" : !saved ? "Saving" : { device: "Device saved", saving: "Syncing", saved: "Cloud saved", offline: "Offline · device saved", failed: "Sync failed · device saved", conflict: "Needs review" }[syncState]}
           </span>
           <button className="icon-button" onClick={() => { saveCurrentLayout(); setLibraryOpen(true); }} aria-label="Saved layouts" title="Saved layouts"><FolderOpen size={18} /></button>
           <button className="icon-button desktop-action" onClick={()=>importInputRef.current?.click()} aria-label="Import shared project" title="Import shared project"><Upload size={18}/></button>
