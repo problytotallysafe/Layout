@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  alignSegmentToHost,
   constrainPointToPolygon,
   endpointAtAngle,
   nearestSnapPoint,
   pointInPolygon,
   roundToIncrement,
   segmentAngleDegrees,
+  segmentProjectionFraction,
   snapToCommonAngle,
 } from "../src/lib/layout-geometry.ts";
 
@@ -49,4 +51,25 @@ test("polygon constraint keeps points inside irregular rooms", () => {
   assert.equal(pointInPolygon({ x: 12, y: 5 }, polygon), false);
   const constrained = constrainPointToPolygon({ x: 12, y: 5 }, polygon);
   assert.equal(pointInPolygon(constrained, polygon), true);
+});
+
+
+test("hosted openings remain centered and aligned on their wall", () => {
+  const hostStart = { x: 0, y: 0 };
+  const hostEnd = { x: 100, y: 0 };
+  const aligned = alignSegmentToHost(hostStart, hostEnd, 36, 0.4);
+  assert.ok(Math.abs(aligned.start.y) < 0.001);
+  assert.ok(Math.abs(aligned.end.y) < 0.001);
+  assert.ok(Math.abs(Math.hypot(aligned.end.x - aligned.start.x, aligned.end.y - aligned.start.y) - 36) < 0.001);
+  assert.ok(Math.abs(segmentProjectionFraction(
+    { x: (aligned.start.x + aligned.end.x) / 2, y: 0 },
+    hostStart,
+    hostEnd,
+  ) - aligned.t) < 0.001);
+});
+
+test("hosted openings are clamped so they cannot extend past a wall end", () => {
+  const aligned = alignSegmentToHost({ x: 0, y: 0 }, { x: 40, y: 0 }, 36, 0.02);
+  assert.ok(aligned.start.x >= -0.001);
+  assert.ok(aligned.end.x <= 40.001);
 });
