@@ -368,6 +368,8 @@ export function LayoutPlanner() {
   const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX), [roomWidth, actualTileW, grout, origin.x, xObstacles, patternPhasesX]);
   const currentYCuts = useMemo(() => assessAxis(roomHeight, actualTileH, grout, origin.y, yObstacles), [roomHeight, actualTileH, grout, origin.y, yObstacles]);
   const selected = items.find((item) => item.id === selectedId) ?? null;
+  const selectedEdgeStart = selectedRoomEdge == null ? null : room[selectedRoomEdge] ?? null;
+  const selectedEdgeEnd = selectedRoomEdge == null ? null : room[(selectedRoomEdge + 1) % room.length] ?? null;
   const dimensionedWall = tool === "select" && selected?.type === "wall" ? selected : null;
   const minimumCut = Math.min(currentXCuts.minimum, currentYCuts.minimum);
   const cutWarning = minimumCut < Math.min(actualTileW, actualTileH) / 2;
@@ -1388,9 +1390,33 @@ export function LayoutPlanner() {
                 </g>
                 <g className="chalk-label" transform={`translate(${startX + 12} ${startY - 7})`}><rect x="-11" y="-3" width="22" height="6" rx="2" /><text y="1">REFERENCE CROSS</text></g>
               </g>}
-              <g className="dimensions" pointerEvents="none">
-                {room.map((point, index) => { const next = room[(index + 1) % room.length]; const midpoint = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }; const labelPoint = outsideDimensionPoint(point, next, roomCenter); return (
-                  <g key={`${point.x}-${point.y}-${index}`}><line x1={midpoint.x} y1={midpoint.y} x2={labelPoint.x} y2={labelPoint.y} /><rect x={labelPoint.x - 9} y={labelPoint.y - 3.4} width="18" height="6.8" rx="2" /><text x={labelPoint.x} y={labelPoint.y + 1.45}>{formatLength(distance(point, next))}</text></g>
+              <g className="dimensions">
+                {room.map((point, index) => { const next = room[(index + 1) % room.length]; const midpoint = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }; const labelPoint = outsideDimensionPoint(point, next, roomCenter); const edgeSelected = selectedRoomEdge === index; return (
+                  <g
+                    key={`${point.x}-${point.y}-${index}`}
+                    className={edgeSelected ? "dimension-edge selected" : "dimension-edge"}
+                    role="button"
+                    tabIndex={tool === "select" ? 0 : -1}
+                    aria-label={`Edit room edge ${index + 1}, ${formatLength(distance(point, next))}`}
+                    onPointerDown={(event) => {
+                      if (tool !== "select") return;
+                      event.stopPropagation();
+                      setSelectedId(null);
+                      setSelectedRoomEdge(index);
+                    }}
+                    onKeyDown={(event) => {
+                      if (tool === "select" && (event.key === "Enter" || event.key === " ")) {
+                        event.preventDefault();
+                        setSelectedId(null);
+                        setSelectedRoomEdge(index);
+                      }
+                    }}
+                  >
+                    <line x1={midpoint.x} y1={midpoint.y} x2={labelPoint.x} y2={labelPoint.y} />
+                    <rect className="dimension-hit" x={labelPoint.x - 13} y={labelPoint.y - 5.2} width="26" height="10.4" rx="3" />
+                    <rect x={labelPoint.x - 9} y={labelPoint.y - 3.4} width="18" height="6.8" rx="2" />
+                    <text x={labelPoint.x} y={labelPoint.y + 1.45}>{formatLength(distance(point, next))}</text>
+                  </g>
                 ); })}
               </g>
               {dimensionedWall && guideWallMidpoint && guideWallOrientation === "vertical" && <g className="wall-offset-guides">
