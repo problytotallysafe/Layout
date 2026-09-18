@@ -304,7 +304,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
 @page { size: landscape; margin: .35in; }
 @media print {
   html, body { width: 100%; min-height: 0; background: white; color: #17221e; }
-  .topbar, .toolrail, .inspector, .canvas-toolbar, .mobile-tools, .library-backdrop, .scale-note { display: none !important; }
+  .topbar, .toolrail, .inspector, .canvas-toolbar, .mobile-tools, .library-backdrop, .scale-note, .suite-return-bar { display: none !important; }
   .print-only { display: block; }
   .workspace { min-height: 0; display: block; }
   .canvas-column { padding: 0; }
