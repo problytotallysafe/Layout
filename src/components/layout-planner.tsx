@@ -42,7 +42,7 @@ export type DrawItem = {
 type Tool = "select" | "pan" | "floor" | "room" | "wall" | "opening";
 type MaterialUnit = "in" | "mm" | "cm";
 type MaterialType = "tile" | "plank";
-type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
+type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete" | "wood";
 type LayoutPattern = "straight" | "half-offset" | "third-offset";
 type DragState =
   | { kind: "draw"; start: Point; current: Point }
@@ -1472,14 +1472,16 @@ export function LayoutPlanner() {
             <div><span>LAYOUT</span><strong>{projectName}</strong></div>
             <dl>
               <div><dt>Room</dt><dd>{formatLength(roomWidth)} × {formatLength(roomHeight)}</dd></div>
-              <div><dt>Tile</dt><dd>{formatLength(tileWidth)} × {formatLength(tileHeight)}</dd></div>
-              <div><dt>Grout</dt><dd>{formatLength(grout)}</dd></div>
+              <div><dt>Material</dt><dd>{materialType === "tile" ? "Tile" : "Plank"} · {formatLength(tileWidth)} × {formatLength(tileHeight)}</dd></div>
+              <div><dt>{materialType === "tile" ? "Grout" : "Piece gap"}</dt><dd>{formatLength(grout)}</dd></div>
+              <div><dt>Pattern</dt><dd>{{ straight: "Straight", "half-offset": "1/2 offset", "third-offset": "1/3 offset" }[pattern]} · {rotation}°</dd></div>
               <div><dt>Floor area</dt><dd>{areaSqFt.toFixed(1)} ft²</dd></div>
+              <div><dt>{hasAngledBoundary ? "Axis cut check" : "Smallest cut"}</dt><dd>{formatLength(minimumCut)}{hasAngledBoundary ? " · verify angled cuts" : ""}</dd></div>
             </dl>
           </header>
           <div className="canvas-toolbar">
             <div className="mode-copy">
-              <strong>{{ select: "Select and adjust", pan: "Move around the plan", floor: "Move the tile field", wall: "Draw a straight wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
+              <strong>{{ select: "Select and adjust", pan: "Move around the plan", floor: "Move the material field", wall: "Draw a straight wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
               <span>{{ select: "Tap a dimension, wall, or opening to edit it exactly.", pan: "Drag the work area after zooming in.", floor: "Drag the reference cross and material grid together.", wall: "Snap helps with endpoints and common 45° angles. Hold Alt on desktop to bypass Snap.", opening: "Snap helps align openings to endpoints and common angles.", room: "Tap each corner. Snap helps keep common angles and closes to the first point." }[tool]}</span>
             </div>
             {tool === "room" && <div className="draft-actions"><button className="text-button" onClick={cancelRoom}>Cancel</button><button className="primary small" disabled={draftRoom.length < 3} onClick={finishRoom}>Finish room</button></div>}
@@ -1518,6 +1520,9 @@ export function LayoutPlanner() {
                 </pattern>
                 <pattern id="concrete-fill" width="7" height="7" patternUnits="userSpaceOnUse">
                   <rect width="7" height="7" fill="#c9cbc8" /><circle cx="1" cy="1.5" r=".25" fill="#999d99" /><circle cx="5.4" cy="3.5" r=".3" fill="#acafab" /><circle cx="2.8" cy="6" r=".2" fill="#8f948f" />
+                </pattern>
+                <pattern id="wood-fill" width="12" height="7" patternUnits="userSpaceOnUse">
+                  <rect width="12" height="7" fill="#c8a978" /><path d="M0 2C3 1 6 3 12 1.8M0 5.5C4 4.2 7 6.5 12 5" fill="none" stroke="#9f7f55" strokeWidth=".35" opacity=".75" />
                 </pattern>
                 <pattern id="tile-pattern" x={patternX} y={patternY} width={pitchX} height={pitchY * patternRows} patternUnits="userSpaceOnUse">
                   {Array.from({ length: patternRows }, (_, row) => {
@@ -1626,7 +1631,7 @@ export function LayoutPlanner() {
           <section className="print-only print-summary">
             <div><span>Vertical reference</span><strong>{formatLength(startLeftReference)} from left / {formatLength(startRightReference)} from right</strong></div>
             <div><span>Horizontal reference</span><strong>{formatLength(startTopReference)} from top / {formatLength(startBottomReference)} from bottom</strong></div>
-            <div><span>Material estimate</span><strong>{tileCount} pieces including {wastePercent}% waste · {mortarBags} × 50 lb mortar bags</strong></div>
+            <div><span>Material estimate</span><strong>{tileCount} pieces including {wastePercent}% waste{materialType === "tile" ? ` · ${mortarBags} × 50 lb mortar bags` : ""}</strong></div>
             {notes.trim() && <div className="print-notes"><span>Install notes</span><strong>{notes.trim()}</strong></div>}
           </section>
         </section>
@@ -1676,15 +1681,20 @@ export function LayoutPlanner() {
           </section>}
 
           <section className="panel tile-panel">
-            <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>Tile / plank layout</strong></span><label className="switch"><input aria-label="Show material layout" type="checkbox" checked={showTile} onChange={(event) => { snapshot(); setShowTile(event.target.checked); }} /><span aria-hidden="true" /></label></div>
-            <div className="material-units" aria-label="Tile measurement unit">
+            <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>{materialType === "tile" ? "Tile layout" : "Plank layout"}</strong></span><label className="switch"><input aria-label="Show material layout" type="checkbox" checked={showTile} onChange={(event) => { snapshot(); setShowTile(event.target.checked); }} /><span aria-hidden="true" /></label></div>
+            <div className="material-kind" aria-label="Material type">
+              {([["tile", "Tile"], ["plank", "Plank"]] as [MaterialType, string][]).map(([value, label]) => (
+                <button key={value} className={materialType === value ? "active" : ""} onClick={() => { snapshot(); setMaterialType(value); }} aria-pressed={materialType === value}>{label}</button>
+              ))}
+            </div>
+            <div className="material-units" aria-label="Material measurement unit">
               {(["in", "mm", "cm"] as MaterialUnit[]).map((unit) => <button key={unit} className={materialUnit === unit ? "active" : ""} onClick={() => { snapshot(); setMaterialUnit(unit); }} aria-pressed={materialUnit === unit}>{unit}</button>)}
             </div>
             <div className="field-row">
               <NumberField label="Material width" value={displayUnit(tileWidth, materialUnit)} onChange={(value) => { snapshot(); setTileWidth(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={materialMin} step={materialStep} />
               <NumberField label="Material length" value={displayUnit(tileHeight, materialUnit)} onChange={(value) => { snapshot(); setTileHeight(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={materialMin} step={materialStep} />
             </div>
-            <NumberField label="Joint / spacing" value={displayUnit(grout, materialUnit)} onChange={(value) => { snapshot(); setGrout(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={groutMin} step={groutStep} />
+            <NumberField label={materialType === "tile" ? "Grout joint" : "Piece gap"} value={displayUnit(grout, materialUnit)} onChange={(value) => { snapshot(); setGrout(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={materialType === "tile" ? groutMin : 0} step={groutStep} />
             <div className="pattern-field">
               <span>Pattern</span>
               <div className="pattern-options">
@@ -1698,9 +1708,12 @@ export function LayoutPlanner() {
               </div>
             </div>
             <div className="appearance-field">
-              <span>Tile appearance</span>
+              <span>Display appearance</span>
               <div className="appearance-options">
-                {([ ["transparent", "Clear"], ["porcelain", "Porcelain"], ["stone", "Stone"], ["marble", "Marble"], ["concrete", "Concrete"] ] as [TileAppearance, string][]).map(([value, label]) => (
+                {(materialType === "tile"
+                  ? ([ ["transparent", "Clear"], ["porcelain", "Porcelain"], ["stone", "Stone"], ["marble", "Marble"], ["concrete", "Concrete"] ] as [TileAppearance, string][])
+                  : ([ ["transparent", "Clear"], ["wood", "Wood"] ] as [TileAppearance, string][])
+                ).map(([value, label]) => (
                   <button key={value} className={tileAppearance === value ? `active appearance-${value}` : `appearance-${value}`} onClick={() => { snapshot(); setTileAppearance(value); }} aria-pressed={tileAppearance === value}><span aria-hidden="true" />{label}</button>
                 ))}
               </div>
@@ -1736,15 +1749,18 @@ export function LayoutPlanner() {
           </section>
 
           <section className="panel install-panel">
-            <div className="panel-heading"><span className="eyebrow">Install setup</span><strong>{mortar.trowel}</strong></div>
-            <div className="install-metrics"><div><span>Mortar estimate</span><strong>{mortarBags} × 50 lb bags</strong></div><div><span>Waste allowance</span><NumberField label="Waste allowance" value={wastePercent} onChange={(value) => { snapshot(); setWastePercent(value); }} suffix="%" min={0} step={1} /></div></div>
-            <p>Planning estimate based on about {mortar.coverage} ft² per bag. Confirm the mortar manufacturer&apos;s coverage and the trowel required for the tile back, substrate flatness, and required mortar coverage; back-buttering can increase usage.</p>
+            <div className="panel-heading"><span className="eyebrow">Install setup</span><strong>{materialType === "tile" ? mortar.trowel : "Plank planning"}</strong></div>
+            <div className="install-metrics">
+              <div><span>{materialType === "tile" ? "Mortar estimate" : "Material takeoff"}</span><strong>{materialType === "tile" ? `${mortarBags} × 50 lb bags` : `${tileCount} pieces`}</strong></div>
+              <div><span>Waste allowance</span><NumberField label="Waste allowance" value={wastePercent} onChange={(value) => { snapshot(); setWastePercent(value); }} suffix="%" min={0} step={1} /></div>
+            </div>
+            <p>{materialType === "tile" ? `Planning estimate based on about ${mortar.coverage} ft² per bag. Confirm the mortar manufacturer’s coverage and the trowel required for the tile back, substrate flatness, and required mortar coverage; back-buttering can increase usage.` : "Piece count is a planning estimate from room area, plank size, and waste. Confirm the flooring manufacturer’s expansion gap, acclimation, staggering, and installation requirements before installation."}</p>
           </section>
         </aside>
       </section>
 
       <nav className="mobile-tools" aria-label="Drawing tools">
-        {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Tile"] ] as const).map(([value, Icon, label]) => (
+        {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Material"] ] as const).map(([value, Icon, label]) => (
           <button key={value} className={value !== "tile" && tool === value ? "active" : ""} onClick={() => { if (value === "tile") document.querySelector(".tile-panel")?.scrollIntoView({ behavior: "smooth" }); else { setTool(value); setDraftRoom([]); setSelectedId(null); setSelectedRoomEdge(null); } }}><Icon size={19} /><span>{label}</span></button>
         ))}
       </nav>
