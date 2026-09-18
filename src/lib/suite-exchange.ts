@@ -24,6 +24,7 @@ type LayoutSettings = {
   tileWidthMm?: number;
   tileHeightMm?: number;
   groutMm?: number;
+  materialType?: SavedLayout["materialType"];
   appearance?: SavedLayout["tileAppearance"];
   pattern?: SavedLayout["pattern"];
   wastePercent?: number;
@@ -216,6 +217,7 @@ export function layoutToSuite(
         tileWidthMm: inchesToMm(layout.tileWidth),
         tileHeightMm: inchesToMm(layout.tileHeight),
         groutMm: inchesToMm(layout.grout),
+        materialType: layout.materialType,
         appearance: layout.tileAppearance,
         pattern: layout.pattern,
         wastePercent: layout.wastePercent,
@@ -315,6 +317,7 @@ export function suiteToLayout(input: unknown): {
       tileHeight: mmToInches(Number(settings.tileHeightMm || 609.6)),
       grout: mmToInches(Number(settings.groutMm || 3.175)),
       materialUnit: "in",
+      materialType: settings.materialType === "plank" ? "plank" : "tile",
       tileAppearance: settings.appearance || "transparent",
       pattern: settings.pattern || "straight",
       wastePercent: Number(settings.wastePercent ?? 10),
