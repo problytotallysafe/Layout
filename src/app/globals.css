@@ -304,8 +304,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:fo
   .print-header > div { display: grid; gap: 2px; }
   .print-header > div span { color: #8a7040; font-size: 9pt; font-weight: 800; letter-spacing: .12em; }
   .print-header > div strong { color: var(--ink-deep); font-size: 18pt; }
-  .print-header dl { display: flex; gap: 22px; margin: 0; }
-  .print-header dl div { display: grid; gap: 2px; }
+  .print-header dl { display: grid; grid-template-columns: repeat(3, minmax(105px, 1fr)); gap: 7px 18px; margin: 0; }
+  .print-header dl div { min-width: 0; display: grid; gap: 2px; }
   .print-header dt { color: var(--muted); font-size: 7pt; text-transform: uppercase; }
   .print-header dd { margin: 0; color: var(--ink-deep); font-size: 9pt; font-weight: 750; }
   .canvas-wrap { height: 5.65in; min-height: 0; overflow: hidden; border: 0; border-radius: 0; background: white; box-shadow: none; }
