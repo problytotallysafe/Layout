@@ -20,9 +20,24 @@ import {
   snapToCommonAngle,
 } from "@/lib/layout-geometry";
 import { assessAxis, balancedOffset, type CutObstacle } from "@/lib/layout-engine";
+import {
+  attachOpeningToNearestHost,
+  moveHostedOpening,
+  reflowRoomHostedOpenings,
+  reflowWallHostedOpenings,
+} from "@/lib/layout-hosting";
 
 export type Point = { x: number; y: number };
-export type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
+export type DrawItem = {
+  id: string;
+  type: "wall" | "opening";
+  start: Point;
+  end: Point;
+  thickness: number;
+  hostId?: string;
+  hostEdgeIndex?: number;
+  hostT?: number;
+};
 type Tool = "select" | "pan" | "floor" | "room" | "wall" | "opening";
 type MaterialUnit = "in" | "mm" | "cm";
 type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
@@ -931,27 +946,39 @@ export function LayoutPlanner() {
     if (drag.kind === "item") {
       const requestedDx = point.x - drag.anchor.x;
       const requestedDy = point.y - drag.anchor.y;
-      setItems((current) => current.map((item) => item.id === drag.id ? {
-        ...item,
-        ...(() => {
-          const original = { ...item, start: drag.originalStart, end: drag.originalEnd };
-          const delta = constrainWallTranslation(original, requestedDx, requestedDy, bounds);
-          return {
-            start: { x: drag.originalStart.x + delta.dx, y: drag.originalStart.y + delta.dy },
-            end: { x: drag.originalEnd.x + delta.dx, y: drag.originalEnd.y + delta.dy },
+      setItems((current) => {
+        const moving = current.find((item) => item.id === drag.id);
+        if (!moving) return current;
+        if (moving.type === "opening" && (moving.hostId || moving.hostEdgeIndex != null)) {
+          const requestedCenter = {
+            x: (drag.originalStart.x + drag.originalEnd.x) / 2 + requestedDx,
+            y: (drag.originalStart.y + drag.originalEnd.y) / 2 + requestedDy,
           };
-        })(),
-      } : item));
+          const updated = moveHostedOpening(moving, current, room, requestedCenter);
+          return current.map((item) => item.id === moving.id ? updated : item);
+        }
+        const original = { ...moving, start: drag.originalStart, end: drag.originalEnd };
+        const delta = constrainWallTranslation(original, requestedDx, requestedDy, bounds);
+        const updated = {
+          ...moving,
+          start: { x: drag.originalStart.x + delta.dx, y: drag.originalStart.y + delta.dy },
+          end: { x: drag.originalEnd.x + delta.dx, y: drag.originalEnd.y + delta.dy },
+        };
+        return moving.type === "wall"
+          ? reflowWallHostedOpenings(current, moving.id, updated)
+          : current.map((item) => item.id === moving.id ? updated : item);
+      });
       return;
     }
-    setItems((current) => current.map((item) => {
-      if (item.id !== drag.id) return item;
+    setItems((current) => {
+      const item = current.find((candidate) => candidate.id === drag.id);
+      if (!item) return current;
       const other = drag.endpoint === "start" ? item.end : item.start;
       const polygonPoint = item.type === "wall" ? constrainPointToPolygon(point, room) : point;
       const boundedPoint = item.type === "wall" ? clampWallPoint(polygonPoint, item.thickness, bounds) : point;
       const candidates = [
         ...room,
-        ...items.filter((candidate) => candidate.id !== item.id).flatMap((candidate) => [candidate.start, candidate.end]),
+        ...current.filter((candidate) => candidate.id !== item.id).flatMap((candidate) => [candidate.start, candidate.end]),
       ];
       const nearby = snapEnabled && !event.altKey
         ? nearestSnapPoint(boundedPoint, candidates, 3)
@@ -961,8 +988,22 @@ export function LayoutPlanner() {
         : snapEnabled && !event.altKey
           ? snapToCommonAngle(other, boundedPoint)
           : boundedPoint;
-      return { ...item, [drag.endpoint]: snapped };
-    }));
+      let updated: DrawItem = { ...item, [drag.endpoint]: snapped };
+      if (item.type === "opening" && (item.hostId || item.hostEdgeIndex != null)) {
+        updated = moveHostedOpening(
+          updated,
+          current,
+          room,
+          {
+            x: (updated.start.x + updated.end.x) / 2,
+            y: (updated.start.y + updated.end.y) / 2,
+          },
+        );
+      }
+      return item.type === "wall"
+        ? reflowWallHostedOpenings(current, item.id, updated)
+        : current.map((candidate) => candidate.id === item.id ? updated : candidate);
+    });
   };
 
   const endPointer = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -976,7 +1017,9 @@ export function LayoutPlanner() {
     if (drag.kind === "draw" && distance(drag.start, drag.current) >= 3) {
       snapshot();
       const rawNext: DrawItem = { id: uid(), type: tool === "opening" ? "opening" : "wall", start: drag.start, end: drag.current, thickness: wallThickness };
-      const next = constrainWallToBounds(rawNext, bounds);
+      const next = rawNext.type === "opening"
+        ? attachOpeningToNearestHost(rawNext, items, room)
+        : constrainWallToBounds(rawNext, bounds);
       setItems((current) => [...current, next]);
       setSelectedId(next.id);
       setTool("select");
