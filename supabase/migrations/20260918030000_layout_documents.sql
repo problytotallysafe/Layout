@@ -1,5 +1,5 @@
 create table if not exists public.layout_documents (
-  id text primary key,
+  id text not null,
   owner_id uuid not null references auth.users(id) on delete cascade,
   organization_id uuid references public.organizations(id) on delete set null,
   name text not null,
@@ -8,7 +8,8 @@ create table if not exists public.layout_documents (
   document jsonb not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  deleted_at timestamptz
+  deleted_at timestamptz,
+  primary key (owner_id, id)
 );
 
 create index if not exists layout_documents_owner_updated_idx
