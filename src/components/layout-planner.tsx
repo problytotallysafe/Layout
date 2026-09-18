@@ -1544,6 +1544,23 @@ export function LayoutPlanner() {
       });
     }
   };
+  const draftWallMidpoint =
+    drag?.kind === "draw" && tool === "wall"
+      ? {
+          x: (drag.start.x + drag.current.x) / 2,
+          y: (drag.start.y + drag.current.y) / 2,
+        }
+      : null;
+  const draftHorizontalSpan = draftWallMidpoint
+    ? horizontalPolygonSpanAtY(room, draftWallMidpoint.y, draftWallMidpoint.x)
+    : null;
+  const draftVerticalSpan = draftWallMidpoint
+    ? verticalPolygonSpanAtX(room, draftWallMidpoint.x, draftWallMidpoint.y)
+    : null;
+  const draftLeftBoundary = draftHorizontalSpan?.min ?? bounds.minX;
+  const draftRightBoundary = draftHorizontalSpan?.max ?? bounds.maxX;
+  const draftTopBoundary = draftVerticalSpan?.min ?? bounds.minY;
+  const draftBottomBoundary = draftVerticalSpan?.max ?? bounds.maxY;
   const tileFill = {
     transparent: "#d4b477",
     porcelain: "#ece9df",
@@ -1726,24 +1743,24 @@ export function LayoutPlanner() {
                 </g>
               ); })}
               {showTile && <g className="chalk-guide" clipPath="url(#room-clip)" pointerEvents="none">
-                <line className="chalk-axis" x1={startX} y1={bounds.minY} x2={startX} y2={bounds.maxY} />
-                <line className="chalk-axis" x1={bounds.minX} y1={startY} x2={bounds.maxX} y2={startY} />
+                <line className="chalk-axis" x1={startX} y1={verticalReferenceSpan.min} x2={startX} y2={verticalReferenceSpan.max} />
+                <line className="chalk-axis" x1={horizontalReferenceSpan.min} y1={startY} x2={horizontalReferenceSpan.max} y2={startY} />
                 <circle cx={startX} cy={startY} r="1.8" />
                 <g className="chalk-measure">
-                  <rect x={(bounds.minX + startX) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={(bounds.minX + startX) / 2} y={startY + 1.25}>{formatLength(startLeftReference)} from left</text>
+                  <rect x={(horizontalReferenceSpan.min + startX) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={(horizontalReferenceSpan.min + startX) / 2} y={startY + 1.25}>{formatLength(startLeftReference)} from left</text>
                 </g>
                 <g className="chalk-measure">
-                  <rect x={(startX + bounds.maxX) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={(startX + bounds.maxX) / 2} y={startY + 1.25}>{formatLength(startRightReference)} from right</text>
+                  <rect x={(startX + horizontalReferenceSpan.max) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={(startX + horizontalReferenceSpan.max) / 2} y={startY + 1.25}>{formatLength(startRightReference)} from right</text>
                 </g>
                 <g className="chalk-measure">
-                  <rect x={startX - 15} y={(bounds.minY + startY) / 2 - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={startX} y={(bounds.minY + startY) / 2 + 1.25}>{formatLength(startTopReference)} from top</text>
+                  <rect x={startX - 15} y={(verticalReferenceSpan.min + startY) / 2 - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={startX} y={(verticalReferenceSpan.min + startY) / 2 + 1.25}>{formatLength(startTopReference)} from top</text>
                 </g>
                 <g className="chalk-measure">
-                  <rect x={startX - 15} y={(startY + bounds.maxY) / 2 - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={startX} y={(startY + bounds.maxY) / 2 + 1.25}>{formatLength(startBottomReference)} from bottom</text>
+                  <rect x={startX - 15} y={(startY + verticalReferenceSpan.max) / 2 - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={startX} y={(startY + verticalReferenceSpan.max) / 2 + 1.25}>{formatLength(startBottomReference)} from bottom</text>
                 </g>
                 <g className="chalk-label" transform={`translate(${startX + 12} ${startY - 7})`}><rect x="-11" y="-3" width="22" height="6" rx="2" /><text y="1">REFERENCE CROSS</text></g>
               </g>}
@@ -1777,29 +1794,29 @@ export function LayoutPlanner() {
                 ); })}
               </g>
               {dimensionedWall && guideWallMidpoint && guideWallOrientation === "vertical" && <g className="wall-offset-guides">
-                <line x1={bounds.minX} y1={guideWallMidpoint.y} x2={guideLeftFace} y2={guideWallMidpoint.y} />
-                <line x1={guideRightFace} y1={guideWallMidpoint.y} x2={bounds.maxX} y2={guideWallMidpoint.y} />
-                <WallOffsetLabel x={(bounds.minX + guideLeftFace) / 2} y={guideWallMidpoint.y} inches={guideLeftFace - bounds.minX} side="left" />
-                <WallOffsetLabel x={(guideRightFace + bounds.maxX) / 2} y={guideWallMidpoint.y} inches={bounds.maxX - guideRightFace} side="right" />
+                <line x1={guideLeftBoundary} y1={guideWallMidpoint.y} x2={guideLeftFace} y2={guideWallMidpoint.y} />
+                <line x1={guideRightFace} y1={guideWallMidpoint.y} x2={guideRightBoundary} y2={guideWallMidpoint.y} />
+                <WallOffsetLabel x={(guideLeftBoundary + guideLeftFace) / 2} y={guideWallMidpoint.y} inches={guideLeftFace - guideLeftBoundary} side="left" />
+                <WallOffsetLabel x={(guideRightFace + guideRightBoundary) / 2} y={guideWallMidpoint.y} inches={guideRightBoundary - guideRightFace} side="right" />
               </g>}
               {dimensionedWall && guideWallMidpoint && guideWallOrientation === "horizontal" && <g className="wall-offset-guides">
-                <line x1={guideWallMidpoint.x} y1={bounds.minY} x2={guideWallMidpoint.x} y2={guideTopFace} />
-                <line x1={guideWallMidpoint.x} y1={guideBottomFace} x2={guideWallMidpoint.x} y2={bounds.maxY} />
-                <WallOffsetLabel x={guideWallMidpoint.x} y={(bounds.minY + guideTopFace) / 2} inches={guideTopFace - bounds.minY} side="top" />
-                <WallOffsetLabel x={guideWallMidpoint.x} y={(guideBottomFace + bounds.maxY) / 2} inches={bounds.maxY - guideBottomFace} side="bottom" />
+                <line x1={guideWallMidpoint.x} y1={guideTopBoundary} x2={guideWallMidpoint.x} y2={guideTopFace} />
+                <line x1={guideWallMidpoint.x} y1={guideBottomFace} x2={guideWallMidpoint.x} y2={guideBottomBoundary} />
+                <WallOffsetLabel x={guideWallMidpoint.x} y={(guideTopBoundary + guideTopFace) / 2} inches={guideTopFace - guideTopBoundary} side="top" />
+                <WallOffsetLabel x={guideWallMidpoint.x} y={(guideBottomFace + guideBottomBoundary) / 2} inches={guideBottomBoundary - guideBottomFace} side="bottom" />
               </g>}
               {drag?.kind === "draw" && <g className="draft-line" pointerEvents="none"><line x1={drag.start.x} y1={drag.start.y} x2={drag.current.x} y2={drag.current.y} strokeWidth={tool === "wall" ? wallThickness : 2.5} /><text x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + drag.current.y) / 2 - 4}>{formatLength(distance(drag.start, drag.current))}</text></g>}
               {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.x - drag.start.x) < 1 && <g className="draft-offset-guides" pointerEvents="none">
-                <line x1={bounds.minX} y1={(drag.start.y + drag.current.y) / 2} x2={drag.start.x - wallThickness / 2} y2={(drag.start.y + drag.current.y) / 2} />
-                <line x1={drag.start.x + wallThickness / 2} y1={(drag.start.y + drag.current.y) / 2} x2={bounds.maxX} y2={(drag.start.y + drag.current.y) / 2} />
-                <WallOffsetLabel x={(bounds.minX + drag.start.x - wallThickness / 2) / 2} y={(drag.start.y + drag.current.y) / 2} inches={drag.start.x - wallThickness / 2 - bounds.minX} side="left" />
-                <WallOffsetLabel x={(drag.start.x + wallThickness / 2 + bounds.maxX) / 2} y={(drag.start.y + drag.current.y) / 2} inches={bounds.maxX - drag.start.x - wallThickness / 2} side="right" />
+                <line x1={draftLeftBoundary} y1={(drag.start.y + drag.current.y) / 2} x2={(drag.start.x + drag.current.x) / 2 - wallThickness / 2} y2={(drag.start.y + drag.current.y) / 2} />
+                <line x1={(drag.start.x + drag.current.x) / 2 + wallThickness / 2} y1={(drag.start.y + drag.current.y) / 2} x2={draftRightBoundary} y2={(drag.start.y + drag.current.y) / 2} />
+                <WallOffsetLabel x={(draftLeftBoundary + (drag.start.x + drag.current.x) / 2 - wallThickness / 2) / 2} y={(drag.start.y + drag.current.y) / 2} inches={(drag.start.x + drag.current.x) / 2 - wallThickness / 2 - draftLeftBoundary} side="left" />
+                <WallOffsetLabel x={((drag.start.x + drag.current.x) / 2 + wallThickness / 2 + draftRightBoundary) / 2} y={(drag.start.y + drag.current.y) / 2} inches={draftRightBoundary - (drag.start.x + drag.current.x) / 2 - wallThickness / 2} side="right" />
               </g>}
               {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.y - drag.start.y) < 1 && <g className="draft-offset-guides" pointerEvents="none">
-                <line x1={(drag.start.x + drag.current.x) / 2} y1={bounds.minY} x2={(drag.start.x + drag.current.x) / 2} y2={drag.start.y - wallThickness / 2} />
-                <line x1={(drag.start.x + drag.current.x) / 2} y1={drag.start.y + wallThickness / 2} x2={(drag.start.x + drag.current.x) / 2} y2={bounds.maxY} />
-                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={(bounds.minY + drag.start.y - wallThickness / 2) / 2} inches={drag.start.y - wallThickness / 2 - bounds.minY} side="top" />
-                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + wallThickness / 2 + bounds.maxY) / 2} inches={bounds.maxY - drag.start.y - wallThickness / 2} side="bottom" />
+                <line x1={(drag.start.x + drag.current.x) / 2} y1={draftTopBoundary} x2={(drag.start.x + drag.current.x) / 2} y2={(drag.start.y + drag.current.y) / 2 - wallThickness / 2} />
+                <line x1={(drag.start.x + drag.current.x) / 2} y1={(drag.start.y + drag.current.y) / 2 + wallThickness / 2} x2={(drag.start.x + drag.current.x) / 2} y2={draftBottomBoundary} />
+                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={(draftTopBoundary + (drag.start.y + drag.current.y) / 2 - wallThickness / 2) / 2} inches={(drag.start.y + drag.current.y) / 2 - wallThickness / 2 - draftTopBoundary} side="top" />
+                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={((drag.start.y + drag.current.y) / 2 + wallThickness / 2 + draftBottomBoundary) / 2} inches={draftBottomBoundary - (drag.start.y + drag.current.y) / 2 - wallThickness / 2} side="bottom" />
               </g>}
               {draftRoom.length > 0 && <g className="draft-room" pointerEvents="none"><polyline points={draftPath} />{draftRoom.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="2" />)}</g>}
             </svg>
@@ -1827,12 +1844,12 @@ export function LayoutPlanner() {
               {selectedOpeningHosted && <button className="text-button" onClick={detachSelectedOpening}>Detach from wall</button>}
             </div>}
             {selected.type === "wall" && guideWallOrientation === "vertical" && <div className="field-row wall-offset-fields">
-              <OffsetField label="From left" inches={guideLeftFace - bounds.minX} onCommit={(value) => setWallOffset("left", value)} />
-              <OffsetField label="From right" inches={bounds.maxX - guideRightFace} onCommit={(value) => setWallOffset("right", value)} />
+              <OffsetField label="From left" inches={guideLeftFace - guideLeftBoundary} onCommit={(value) => setWallOffset("left", value)} />
+              <OffsetField label="From right" inches={guideRightBoundary - guideRightFace} onCommit={(value) => setWallOffset("right", value)} />
             </div>}
             {selected.type === "wall" && guideWallOrientation === "horizontal" && <div className="field-row wall-offset-fields">
-              <OffsetField label="From top" inches={guideTopFace - bounds.minY} onCommit={(value) => setWallOffset("top", value)} />
-              <OffsetField label="From bottom" inches={bounds.maxY - guideBottomFace} onCommit={(value) => setWallOffset("bottom", value)} />
+              <OffsetField label="From top" inches={guideTopFace - guideTopBoundary} onCommit={(value) => setWallOffset("top", value)} />
+              <OffsetField label="From bottom" inches={guideBottomBoundary - guideBottomFace} onCommit={(value) => setWallOffset("bottom", value)} />
             </div>}
             {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure from both room borders to the nearest wall face. Use the fields above to enter an exact offset. The guides are visible only while this wall is selected.</p>}
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
