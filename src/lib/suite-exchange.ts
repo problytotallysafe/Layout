@@ -188,7 +188,7 @@ export function layoutToSuite(
 
   const room: SuiteRoom = {
     id: sourceRoom?.id || context?.sourceRoomId || `room_${layout.id}`,
-    name: sourceRoom?.name || layout.projectName,
+    name: sourceRoom?.name || layout.roomName || layout.projectName,
     displayUnit: sourceRoom?.displayUnit || "ft-in",
     origin: sourceRoom?.origin || { x: 0, y: 0 },
     entities: [
@@ -311,6 +311,7 @@ export function suiteToLayout(input: unknown): {
       revision: Math.max(1, Number(parsed.value.source.revision) || 1),
       updatedAt: now,
       projectName: parsed.value.project.name,
+      roomName: room.name,
       room: roomInches,
       items: imported,
       tileWidth: mmToInches(Number(settings.tileWidthMm || 304.8)),
