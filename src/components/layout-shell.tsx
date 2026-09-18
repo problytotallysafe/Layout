@@ -283,6 +283,7 @@ export function LayoutShell() {
   }, [syncNow]);
 
   const returnToBuildr = useCallback(async () => {
+    window.dispatchEvent(new Event("buildr:save-now"));
     const layout = activeLayout();
     if (!layout) return;
     const linked = layout.suiteContext as ExtendedContext | undefined;
