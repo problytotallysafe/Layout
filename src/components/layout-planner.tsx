@@ -17,10 +17,13 @@ import {
   constrainSegmentToPolygonInset,
   constrainSegmentTranslationToPolygonInset,
   endpointAtAngle,
+  horizontalPolygonSpanAtY,
+  nearestGridIntersectionInsidePolygon,
   nearestSnapPoint,
   roundToIncrement,
   segmentAngleDegrees,
   snapToCommonAngle,
+  verticalPolygonSpanAtX,
 } from "@/lib/layout-geometry";
 import {
   assessObstacleCuts,
@@ -1426,20 +1429,45 @@ export function LayoutPlanner() {
   const roomCenter = polygonCenter(room);
   const patternX = bounds.minX + origin.x;
   const patternY = bounds.minY + origin.y;
-  const startX = patternX + Math.floor(((bounds.minX + bounds.maxX) / 2 - patternX) / pitchX) * pitchX;
-  const startY = patternY + Math.floor(((bounds.minY + bounds.maxY) / 2 - patternY) / pitchY) * pitchY;
-  const startLeftReference = Math.max(0, startX - bounds.minX);
-  const startRightReference = Math.max(0, bounds.maxX - startX);
-  const startTopReference = Math.max(0, startY - bounds.minY);
-  const startBottomReference = Math.max(0, bounds.maxY - startY);
+  const referenceCross = nearestGridIntersectionInsidePolygon(
+    room,
+    { x: patternX, y: patternY },
+    pitchX,
+    pitchY,
+    { x: patternX, y: patternY },
+  );
+  const startX = referenceCross.x;
+  const startY = referenceCross.y;
+  const horizontalReferenceSpan =
+    horizontalPolygonSpanAtY(room, startY, startX) ?? { min: bounds.minX, max: bounds.maxX };
+  const verticalReferenceSpan =
+    verticalPolygonSpanAtX(room, startX, startY) ?? { min: bounds.minY, max: bounds.maxY };
+  const startLeftReference = Math.max(0, startX - horizontalReferenceSpan.min);
+  const startRightReference = Math.max(0, horizontalReferenceSpan.max - startX);
+  const startTopReference = Math.max(0, startY - verticalReferenceSpan.min);
+  const startBottomReference = Math.max(0, verticalReferenceSpan.max - startY);
   const setReferenceOffset = (axis: "x" | "y", value: number) => {
     snapshot();
     if (axis === "x") {
-      const target = clamp(bounds.minX + value, bounds.minX, bounds.maxX);
-      setOrigin((current) => ({ ...current, x: current.x + target - startX }));
+      const target = clamp(
+        horizontalReferenceSpan.min + value,
+        horizontalReferenceSpan.min,
+        horizontalReferenceSpan.max,
+      );
+      setOrigin({
+        x: target - bounds.minX,
+        y: startY - bounds.minY,
+      });
     } else {
-      const target = clamp(bounds.minY + value, bounds.minY, bounds.maxY);
-      setOrigin((current) => ({ ...current, y: current.y + target - startY }));
+      const target = clamp(
+        verticalReferenceSpan.min + value,
+        verticalReferenceSpan.min,
+        verticalReferenceSpan.max,
+      );
+      setOrigin({
+        x: startX - bounds.minX,
+        y: target - bounds.minY,
+      });
     }
   };
   const guideWallOrientation = dimensionedWall
@@ -1454,6 +1482,16 @@ export function LayoutPlanner() {
     y: (dimensionedWall.start.y + dimensionedWall.end.y) / 2,
   } : null;
   const guideHalfThickness = dimensionedWall ? dimensionedWall.thickness / 2 : 0;
+  const guideHorizontalSpan = guideWallMidpoint
+    ? horizontalPolygonSpanAtY(room, guideWallMidpoint.y, guideWallMidpoint.x)
+    : null;
+  const guideVerticalSpan = guideWallMidpoint
+    ? verticalPolygonSpanAtX(room, guideWallMidpoint.x, guideWallMidpoint.y)
+    : null;
+  const guideLeftBoundary = guideHorizontalSpan?.min ?? bounds.minX;
+  const guideRightBoundary = guideHorizontalSpan?.max ?? bounds.maxX;
+  const guideTopBoundary = guideVerticalSpan?.min ?? bounds.minY;
+  const guideBottomBoundary = guideVerticalSpan?.max ?? bounds.maxY;
   const guideLeftFace = guideWallMidpoint ? guideWallMidpoint.x - guideHalfThickness : 0;
   const guideRightFace = guideWallMidpoint ? guideWallMidpoint.x + guideHalfThickness : 0;
   const guideTopFace = guideWallMidpoint ? guideWallMidpoint.y - guideHalfThickness : 0;
@@ -1463,8 +1501,14 @@ export function LayoutPlanner() {
     snapshot();
     const halfThickness = dimensionedWall.thickness / 2;
     if (side === "left" || side === "right") {
-      const rawTarget = side === "left" ? bounds.minX + value + halfThickness : bounds.maxX - value - halfThickness;
-      const target = clamp(rawTarget, bounds.minX + halfThickness, bounds.maxX - halfThickness);
+      const rawTarget = side === "left"
+        ? guideLeftBoundary + value + halfThickness
+        : guideRightBoundary - value - halfThickness;
+      const target = clamp(
+        rawTarget,
+        guideLeftBoundary + halfThickness,
+        guideRightBoundary - halfThickness,
+      );
       const delta = target - guideWallMidpoint.x;
       setItems((current) => {
         const wall = current.find((item) => item.id === dimensionedWall.id);
@@ -1478,8 +1522,14 @@ export function LayoutPlanner() {
         return reflowWallHostedOpenings(current, wall.id, updated);
       });
     } else {
-      const rawTarget = side === "top" ? bounds.minY + value + halfThickness : bounds.maxY - value - halfThickness;
-      const target = clamp(rawTarget, bounds.minY + halfThickness, bounds.maxY - halfThickness);
+      const rawTarget = side === "top"
+        ? guideTopBoundary + value + halfThickness
+        : guideBottomBoundary - value - halfThickness;
+      const target = clamp(
+        rawTarget,
+        guideTopBoundary + halfThickness,
+        guideBottomBoundary - halfThickness,
+      );
       const delta = target - guideWallMidpoint.y;
       setItems((current) => {
         const wall = current.find((item) => item.id === dimensionedWall.id);
