@@ -1116,6 +1116,21 @@ export function LayoutPlanner() {
     } : item));
   };
 
+  const updateSelectedThickness = (value: number) => {
+    if (!selected || selectedOpeningHosted) return;
+    snapshot();
+    setItems((current) => {
+      const item = current.find((candidate) => candidate.id === selected.id);
+      if (!item) return current;
+      const updated = item.type === "wall"
+        ? constrainWallToBounds({ ...item, thickness: value }, bounds)
+        : { ...item, thickness: value };
+      return item.type === "wall"
+        ? reflowWallHostedOpenings(current, item.id, updated)
+        : current.map((candidate) => candidate.id === item.id ? updated : candidate);
+    });
+  };
+
   const updateSelectedAngle = (degrees: number) => {
     if (!selected) return;
     snapshot();
@@ -1566,9 +1581,14 @@ export function LayoutPlanner() {
             <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? "Wall" : "Opening"}</strong></div>
             <div className="field-row">
               <NumberField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} suffix="in" min={1} />
-              <NumberField label="Angle" value={segmentAngleDegrees(selected.start, selected.end)} onChange={updateSelectedAngle} suffix="°" min={0} step={1} />
+              <NumberField label={selectedOpeningHosted ? "Angle (host)" : "Angle"} value={segmentAngleDegrees(selected.start, selected.end)} onChange={updateSelectedAngle} suffix="°" min={0} step={1} disabled={selectedOpeningHosted} />
             </div>
-            <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => { snapshot(); setItems((current) => current.map((item) => item.id === selected.id ? constrainWallToBounds({ ...item, thickness: value }, bounds) : item)); }} suffix="in" min={1} step={.5} />
+            <NumberField label={selected.type === "wall" ? "Thickness" : selectedOpeningHosted ? "Host wall thickness" : "Wall thickness"} value={selected.thickness} onChange={updateSelectedThickness} suffix="in" min={1} step={.5} disabled={selectedOpeningHosted} />
+            {selected.type === "opening" && <div className={`host-status ${selectedOpeningHosted ? "attached" : "free"}`}>
+              <strong>{selected.hostId ? "Attached to interior wall" : selected.hostEdgeIndex != null ? `Attached to room edge ${selected.hostEdgeIndex + 1}` : "Free opening"}</strong>
+              <span>{selectedOpeningHosted ? "Moving or resizing this opening keeps it on its wall." : "Move this opening near a wall and redraw it there if you want a hosted relationship."}</span>
+              {selectedOpeningHosted && <button className="text-button" onClick={detachSelectedOpening}>Detach from wall</button>}
+            </div>}
             {selected.type === "wall" && guideWallOrientation === "vertical" && <div className="field-row wall-offset-fields">
               <OffsetField label="From left" inches={guideLeftFace - bounds.minX} onCommit={(value) => setWallOffset("left", value)} />
               <OffsetField label="From right" inches={bounds.maxX - guideRightFace} onCommit={(value) => setWallOffset("right", value)} />
@@ -1579,7 +1599,13 @@ export function LayoutPlanner() {
             </div>}
             {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure from both room borders to the nearest wall face. Use the fields above to enter an exact offset. The guides are visible only while this wall is selected.</p>}
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
-            <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); setSelectedId(null); }}>Delete {selected.type}</button>
+            <button className="delete-button" onClick={() => {
+              snapshot();
+              setItems((current) => selected.type === "wall"
+                ? current.filter((item) => item.id !== selected.id && item.hostId !== selected.id)
+                : current.filter((item) => item.id !== selected.id));
+              setSelectedId(null);
+            }}>Delete {selected.type}{selected.type === "wall" && items.some((item) => item.hostId === selected.id) ? " + attached openings" : ""}</button>
           </section> : selectedEdgeStart && selectedEdgeEnd && selectedRoomEdge != null ? <section className="panel selected-panel">
             <div className="panel-heading"><span className="eyebrow">Selected dimension</span><strong>Room edge {selectedRoomEdge + 1}</strong></div>
             <div className="field-row">
