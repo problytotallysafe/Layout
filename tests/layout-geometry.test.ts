@@ -3,10 +3,15 @@ import assert from "node:assert/strict";
 import {
   alignSegmentToHost,
   constrainPointToPolygon,
+  constrainPointToPolygonInset,
+  constrainSegmentToPolygonInset,
+  constrainSegmentTranslationToPolygonInset,
   endpointAtAngle,
   nearestSnapPoint,
   pointInPolygon,
+  pointInPolygonInset,
   roundToIncrement,
+  segmentFitsPolygonInset,
   segmentAngleDegrees,
   segmentProjectionFraction,
   snapToCommonAngle,
@@ -72,4 +77,61 @@ test("hosted openings are clamped so they cannot extend past a wall end", () => 
   const aligned = alignSegmentToHost({ x: 0, y: 0 }, { x: 40, y: 0 }, 36, 0.02);
   assert.ok(aligned.start.x >= -0.001);
   assert.ok(aligned.end.x <= 40.001);
+});
+
+
+test("keeps wall clearance inside angled room edges", () => {
+  const room = [
+    { x: 0, y: 0 },
+    { x: 20, y: 0 },
+    { x: 10, y: 20 },
+  ];
+  const constrained = constrainPointToPolygonInset({ x: 10, y: 19.5 }, room, 2);
+  assert.equal(pointInPolygonInset(constrained, room, 2), true);
+  assert.ok(constrained.y < 19.5);
+});
+
+test("rejects wall segments that cross outside a concave room", () => {
+  const room = [
+    { x: 0, y: 0 },
+    { x: 12, y: 0 },
+    { x: 12, y: 4 },
+    { x: 4, y: 4 },
+    { x: 4, y: 12 },
+    { x: 0, y: 12 },
+  ];
+  const start = { x: 2, y: 10 };
+  const requestedEnd = { x: 10, y: 2 };
+  assert.equal(segmentFitsPolygonInset(start, requestedEnd, room, 0.5), false);
+  const constrained = constrainSegmentToPolygonInset(start, requestedEnd, room, 0.5);
+  assert.equal(segmentFitsPolygonInset(constrained.start, constrained.end, room, 0.5), true);
+  assert.ok(constrained.end.x <= 3.501);
+});
+
+test("limits whole-wall translation before it crosses the room boundary", () => {
+  const room = [
+    { x: 0, y: 0 },
+    { x: 20, y: 0 },
+    { x: 20, y: 20 },
+    { x: 0, y: 20 },
+  ];
+  const delta = constrainSegmentTranslationToPolygonInset(
+    { x: 3, y: 3 },
+    { x: 17, y: 3 },
+    0,
+    -5,
+    room,
+    2,
+  );
+  assert.ok(delta.dy <= 0);
+  assert.ok(delta.dy >= -1.01);
+  assert.equal(
+    segmentFitsPolygonInset(
+      { x: 3 + delta.dx, y: 3 + delta.dy },
+      { x: 17 + delta.dx, y: 3 + delta.dy },
+      room,
+      2,
+    ),
+    true,
+  );
 });
