@@ -1079,32 +1079,52 @@ export function LayoutPlanner() {
   const updateSelectedLength = (nextLength: number) => {
     if (!selected || nextLength <= 0) return;
     snapshot();
-    const currentLength = distance(selected.start, selected.end) || 1;
-    const scale = nextLength / currentLength;
-    setItems((current) => current.map((item) => {
-      if (item.id !== selected.id) return item;
-      const end = {
+    setItems((current) => {
+      const item = current.find((candidate) => candidate.id === selected.id);
+      if (!item) return current;
+      const currentLength = distance(item.start, item.end) || 1;
+      const scale = nextLength / currentLength;
+      const rawEnd = {
         x: item.start.x + (item.end.x - item.start.x) * scale,
         y: item.start.y + (item.end.y - item.start.y) * scale,
       };
-      const polygonEnd = item.type === "wall" ? constrainPointToPolygon(end, room) : end;
-      return { ...item, end: item.type === "wall" ? clampWallPoint(polygonEnd, item.thickness, bounds) : polygonEnd };
-    }));
+      const polygonEnd = item.type === "wall" ? constrainPointToPolygon(rawEnd, room) : rawEnd;
+      let updated: DrawItem = {
+        ...item,
+        end: item.type === "wall" ? clampWallPoint(polygonEnd, item.thickness, bounds) : polygonEnd,
+      };
+      if (item.type === "opening" && (item.hostId || item.hostEdgeIndex != null)) {
+        updated = moveHostedOpening(updated, current, room, {
+          x: (item.start.x + item.end.x) / 2,
+          y: (item.start.y + item.end.y) / 2,
+        });
+      }
+      return item.type === "wall"
+        ? reflowWallHostedOpenings(current, item.id, updated)
+        : current.map((candidate) => candidate.id === item.id ? updated : candidate);
+    });
   };
   const updateSelectedAngle = (degrees: number) => {
     if (!selected) return;
     snapshot();
-    const rawEnd = endpointAtAngle(selected.start, distance(selected.start, selected.end), degrees);
-    setItems((current) => current.map((item) => {
-      if (item.id !== selected.id) return item;
+    setItems((current) => {
+      const item = current.find((candidate) => candidate.id === selected.id);
+      if (!item) return current;
+      const rawEnd = endpointAtAngle(item.start, distance(item.start, item.end), degrees);
       const polygonEnd = item.type === "wall" ? constrainPointToPolygon(rawEnd, room) : rawEnd;
-      return {
+      const updated: DrawItem = {
         ...item,
         end: item.type === "wall"
           ? clampWallPoint(polygonEnd, item.thickness, bounds)
           : polygonEnd,
+        ...(item.type === "opening"
+          ? { hostId: undefined, hostEdgeIndex: undefined, hostT: undefined }
+          : {}),
       };
-    }));
+      return item.type === "wall"
+        ? reflowWallHostedOpenings(current, item.id, updated)
+        : current.map((candidate) => candidate.id === item.id ? updated : candidate);
+    });
   };
   const resizeRectangle = (axis: "width" | "height", value: number) => {
     if (!isRectangle(room) || value < 24) return;
