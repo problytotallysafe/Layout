@@ -66,6 +66,7 @@ function signature(layout: SavedLayout) {
     tileHeight: layout.tileHeight,
     grout: layout.grout,
     materialUnit: layout.materialUnit,
+    materialType: layout.materialType,
     tileAppearance: layout.tileAppearance,
     pattern: layout.pattern,
     wastePercent: layout.wastePercent,
