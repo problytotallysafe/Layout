@@ -1309,7 +1309,7 @@ export function LayoutPlanner() {
                   <rect x={startX - 15} y={(startY + bounds.maxY) / 2 - 3.4} width="30" height="6.8" rx="2" />
                   <text x={startX} y={(startY + bounds.maxY) / 2 + 1.25}>{formatLength(startBottomReference)} from bottom</text>
                 </g>
-                <g className="chalk-label" transform={`translate(${startX + 12} ${startY - 7})`}><rect x="-10" y="-3" width="20" height="6" rx="2" /><text y="1">CHALK CROSSING</text></g>
+                <g className="chalk-label" transform={`translate(${startX + 12} ${startY - 7})`}><rect x="-11" y="-3" width="22" height="6" rx="2" /><text y="1">REFERENCE CROSS</text></g>
               </g>}
               <g className="dimensions" pointerEvents="none">
                 {room.map((point, index) => { const next = room[(index + 1) % room.length]; const midpoint = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }; const labelPoint = outsideDimensionPoint(point, next, roomCenter); return (
@@ -1378,26 +1378,38 @@ export function LayoutPlanner() {
           </section>}
 
           <section className="panel tile-panel">
-            <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>Tile layout</strong></span><label className="switch"><input aria-label="Show tile layout" type="checkbox" checked={showTile} onChange={(event) => setShowTile(event.target.checked)} /><span aria-hidden="true" /></label></div>
+            <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>Tile / plank layout</strong></span><label className="switch"><input aria-label="Show material layout" type="checkbox" checked={showTile} onChange={(event) => { snapshot(); setShowTile(event.target.checked); }} /><span aria-hidden="true" /></label></div>
             <div className="material-units" aria-label="Tile measurement unit">
-              {(["in", "mm", "cm"] as MaterialUnit[]).map((unit) => <button key={unit} className={materialUnit === unit ? "active" : ""} onClick={() => setMaterialUnit(unit)} aria-pressed={materialUnit === unit}>{unit}</button>)}
+              {(["in", "mm", "cm"] as MaterialUnit[]).map((unit) => <button key={unit} className={materialUnit === unit ? "active" : ""} onClick={() => { snapshot(); setMaterialUnit(unit); }} aria-pressed={materialUnit === unit}>{unit}</button>)}
             </div>
             <div className="field-row">
-              <NumberField label="Tile width" value={displayUnit(tileWidth, materialUnit)} onChange={(value) => setTileWidth(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={materialMin} step={materialStep} />
-              <NumberField label="Tile length" value={displayUnit(tileHeight, materialUnit)} onChange={(value) => setTileHeight(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={materialMin} step={materialStep} />
+              <NumberField label="Material width" value={displayUnit(tileWidth, materialUnit)} onChange={(value) => { snapshot(); setTileWidth(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={materialMin} step={materialStep} />
+              <NumberField label="Material length" value={displayUnit(tileHeight, materialUnit)} onChange={(value) => { snapshot(); setTileHeight(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={materialMin} step={materialStep} />
             </div>
-            <NumberField label="Grout joint" value={displayUnit(grout, materialUnit)} onChange={(value) => setGrout(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={groutMin} step={groutStep} />
+            <NumberField label="Joint / spacing" value={displayUnit(grout, materialUnit)} onChange={(value) => { snapshot(); setGrout(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={groutMin} step={groutStep} />
+            <div className="pattern-field">
+              <span>Pattern</span>
+              <div className="pattern-options">
+                {([
+                  ["straight", "Straight"],
+                  ["half-offset", "1/2 offset"],
+                  ["third-offset", "1/3 offset"],
+                ] as [LayoutPattern, string][]).map(([value, label]) => (
+                  <button key={value} className={pattern === value ? "active" : ""} onClick={() => { snapshot(); setPattern(value); }} aria-pressed={pattern === value}>{label}</button>
+                ))}
+              </div>
+            </div>
             <div className="appearance-field">
               <span>Tile appearance</span>
               <div className="appearance-options">
                 {([ ["transparent", "Clear"], ["porcelain", "Porcelain"], ["stone", "Stone"], ["marble", "Marble"], ["concrete", "Concrete"] ] as [TileAppearance, string][]).map(([value, label]) => (
-                  <button key={value} className={tileAppearance === value ? `active appearance-${value}` : `appearance-${value}`} onClick={() => setTileAppearance(value)} aria-pressed={tileAppearance === value}><span aria-hidden="true" />{label}</button>
+                  <button key={value} className={tileAppearance === value ? `active appearance-${value}` : `appearance-${value}`} onClick={() => { snapshot(); setTileAppearance(value); }} aria-pressed={tileAppearance === value}><span aria-hidden="true" />{label}</button>
                 ))}
               </div>
             </div>
-            <div className="button-row"><button className="secondary" onClick={() => setRotation((value) => value === 0 ? 90 : 0)}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Optimize cuts</button></div>
-            <button className={`grab-floor-button ${tool === "floor" ? "active" : ""}`} onClick={() => { setShowTile(true); setTool("floor"); setSelectedId(null); }}><Move size={16} /> {tool === "floor" ? "Drag the floor on the plan" : "Grab and move floor"}</button>
-            <div className="nudge-control"><span>Precision adjustment · 1/4″</span><div><button onClick={() => setOrigin((point) => ({ ...point, x: point.x - .25 }))} aria-label="Move layout left">←</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y - .25 }))} aria-label="Move layout up">↑</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y + .25 }))} aria-label="Move layout down">↓</button><button onClick={() => setOrigin((point) => ({ ...point, x: point.x + .25 }))} aria-label="Move layout right">→</button></div></div>
+            <div className="button-row"><button className="secondary" onClick={() => { snapshot(); setRotation((value) => value === 0 ? 90 : 0); }}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Optimize cuts</button></div>
+            <button className={`grab-floor-button ${tool === "floor" ? "active" : ""}`} onClick={() => { setShowTile(true); setTool("floor"); setSelectedId(null); }}><Move size={16} /> {tool === "floor" ? "Drag reference lines and material" : "Move reference lines / material"}</button>
+            <div className="nudge-control"><span>Precision adjustment · 1/8″</span><div><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, x: point.x - .125 })); }} aria-label="Move layout left">←</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, y: point.y - .125 })); }} aria-label="Move layout up">↑</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, y: point.y + .125 })); }} aria-label="Move layout down">↓</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, x: point.x + .125 })); }} aria-label="Move layout right">→</button></div></div>
           </section>
 
           <section className="panel results-panel">
@@ -1409,7 +1421,7 @@ export function LayoutPlanner() {
 
           <section className="panel install-panel">
             <div className="panel-heading"><span className="eyebrow">Install setup</span><strong>{mortar.trowel}</strong></div>
-            <div className="install-metrics"><div><span>Mortar estimate</span><strong>{mortarBags} × 50 lb bags</strong></div><div><span>Waste allowance</span><NumberField label="Waste allowance" value={wastePercent} onChange={setWastePercent} suffix="%" min={0} step={1} /></div></div>
+            <div className="install-metrics"><div><span>Mortar estimate</span><strong>{mortarBags} × 50 lb bags</strong></div><div><span>Waste allowance</span><NumberField label="Waste allowance" value={wastePercent} onChange={(value) => { snapshot(); setWastePercent(value); }} suffix="%" min={0} step={1} /></div></div>
             <p>Planning estimate based on about {mortar.coverage} ft² per bag. Confirm the mortar manufacturer&apos;s coverage and the trowel required for the tile back, substrate flatness, and required mortar coverage; back-buttering can increase usage.</p>
           </section>
         </aside>
