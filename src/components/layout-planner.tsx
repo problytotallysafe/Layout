@@ -1291,12 +1291,18 @@ export function LayoutPlanner() {
       if ((event.key === "Delete" || event.key === "Backspace") && selectedId) {
         event.preventDefault();
         snapshot();
-        setItems((current) => current.filter((item) => item.id !== selectedId));
+        setItems((current) => {
+          const selectedItem = current.find((item) => item.id === selectedId);
+          return selectedItem?.type === "wall"
+            ? current.filter((item) => item.id !== selectedId && item.hostId !== selectedId)
+            : current.filter((item) => item.id !== selectedId);
+        });
         setSelectedId(null);
         return;
       }
       if (event.key === "Escape") {
         setSelectedId(null);
+        setSelectedRoomEdge(null);
         setDraftRoom([]);
         setDrag(null);
         setTool("select");
@@ -1516,7 +1522,7 @@ export function LayoutPlanner() {
               onPointerUpCapture={endPointerTracking} onPointerCancelCapture={endPointerTracking}
               onPointerDown={startDrawing} onPointerMove={movePointer} onPointerUp={endPointer} onPointerCancel={endPointer}
               onWheel={(event) => { event.preventDefault(); changeZoom(zoom * (event.deltaY > 0 ? .9 : 1.1), { x: event.clientX, y: event.clientY }); }}
-              role="img" aria-label="Editable floor plan and tile layout">
+              role="application" aria-label="Interactive floor plan and material layout">
               <defs>
                 <pattern id="minor-grid" width="3" height="3" patternUnits="userSpaceOnUse"><path d="M 3 0 L 0 0 0 3" fill="none" stroke="#d9dfdb" strokeWidth=".25" /></pattern>
                 <pattern id="major-grid" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="12" height="12" fill="url(#minor-grid)" /><path d="M 12 0 L 0 0 0 12" fill="none" stroke="#b9c4bd" strokeWidth=".45" /></pattern>
