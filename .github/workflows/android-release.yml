@@ -106,7 +106,7 @@ jobs:
         run: |
           test -n "$ANDROID_KEYSTORE_BASE64"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/layout-release.jks"
-      - name: Build signed release bundle
+      - name: Build signed release APK and bundle
         env:
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/layout-release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -114,22 +114,24 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew clean bundleRelease
+          ./gradlew clean assembleRelease bundleRelease
         working-directory: android
       - name: Verify AAB signature integrity
         run: |
           jarsigner -verify -verbose -certs android/app/build/outputs/bundle/release/app-release.aab | tee layout-jarsigner-verify.txt
           grep -q 'jar verified.' layout-jarsigner-verify.txt
-      - name: Record bundle metadata
+      - name: Record Android release metadata
         run: |
           cp android/app/build/outputs/bundle/release/app-release.aab Layout-1.0.0-rc.aab
-          sha256sum Layout-1.0.0-rc.aab > layout-release.sha256
+          cp android/app/build/outputs/apk/release/app-release.apk Layout-1.0.0-rc.apk
+          sha256sum Layout-1.0.0-rc.aab Layout-1.0.0-rc.apk > layout-release.sha256
           grep -E 'applicationId|versionCode|versionName' android/app/build.gradle > layout-release-version.txt
       - uses: actions/upload-artifact@v4
         with:
           name: layout-1.0.0-release-candidate
           path: |
             Layout-1.0.0-rc.aab
+            Layout-1.0.0-rc.apk
             layout-release.sha256
             layout-release-version.txt
             layout-jarsigner-verify.txt
