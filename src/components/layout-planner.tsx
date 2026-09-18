@@ -24,6 +24,7 @@ import { formatLength, parseLength } from "@/lib/layout-measurements";
 import {
   attachOpeningToNearestHost,
   moveHostedOpening,
+  removeItemWithDependents,
   reflowRoomHostedOpenings,
   reflowWallHostedOpenings,
 } from "@/lib/layout-hosting";
@@ -1291,12 +1292,7 @@ export function LayoutPlanner() {
       if ((event.key === "Delete" || event.key === "Backspace") && selectedId) {
         event.preventDefault();
         snapshot();
-        setItems((current) => {
-          const selectedItem = current.find((item) => item.id === selectedId);
-          return selectedItem?.type === "wall"
-            ? current.filter((item) => item.id !== selectedId && item.hostId !== selectedId)
-            : current.filter((item) => item.id !== selectedId);
-        });
+        setItems((current) => removeItemWithDependents(current, selectedId));
         setSelectedId(null);
         return;
       }
@@ -1676,9 +1672,7 @@ export function LayoutPlanner() {
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
             <button className="delete-button" onClick={() => {
               snapshot();
-              setItems((current) => selected.type === "wall"
-                ? current.filter((item) => item.id !== selected.id && item.hostId !== selected.id)
-                : current.filter((item) => item.id !== selected.id));
+              setItems((current) => removeItemWithDependents(current, selected.id));
               setSelectedId(null);
             }}>Delete {selected.type}{selected.type === "wall" && items.some((item) => item.hostId === selected.id) ? " + attached openings" : ""}</button>
           </section> : selectedEdgeStart && selectedEdgeEnd && selectedRoomEdge != null ? <section className="panel selected-panel">
