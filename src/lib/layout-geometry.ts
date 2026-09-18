@@ -400,3 +400,121 @@ export function alignSegmentToHost(
     t,
   };
 }
+
+
+export type PolygonAxisSpan = { min: number; max: number };
+
+function spanForIntersections(values: number[], hint: number): PolygonAxisSpan | null {
+  const sorted = values
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b)
+    .filter((value, index, all) => index === 0 || Math.abs(value - all[index - 1]) > GEOMETRY_EPSILON);
+  const spans: PolygonAxisSpan[] = [];
+  for (let index = 0; index + 1 < sorted.length; index += 2) {
+    spans.push({ min: sorted[index], max: sorted[index + 1] });
+  }
+  if (!spans.length) return null;
+  const containing = spans.find(
+    (span) => hint >= span.min - GEOMETRY_EPSILON && hint <= span.max + GEOMETRY_EPSILON,
+  );
+  if (containing) return containing;
+  return spans.reduce((best, span) => {
+    const bestDistance = hint < best.min ? best.min - hint : hint > best.max ? hint - best.max : 0;
+    const currentDistance = hint < span.min ? span.min - hint : hint > span.max ? hint - span.max : 0;
+    return currentDistance < bestDistance ? span : best;
+  });
+}
+
+function horizontalIntersections(
+  polygon: GeometryPoint[],
+  y: number,
+) {
+  const values: number[] = [];
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    const crosses = (start.y <= y && end.y > y) || (end.y <= y && start.y > y);
+    if (!crosses) continue;
+    const t = (y - start.y) / (end.y - start.y);
+    values.push(start.x + (end.x - start.x) * t);
+  }
+  return values;
+}
+
+function verticalIntersections(
+  polygon: GeometryPoint[],
+  x: number,
+) {
+  const values: number[] = [];
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    const crosses = (start.x <= x && end.x > x) || (end.x <= x && start.x > x);
+    if (!crosses) continue;
+    const t = (x - start.x) / (end.x - start.x);
+    values.push(start.y + (end.y - start.y) * t);
+  }
+  return values;
+}
+
+export function horizontalPolygonSpanAtY(
+  polygon: GeometryPoint[],
+  y: number,
+  xHint: number,
+): PolygonAxisSpan | null {
+  if (polygon.length < 3) return null;
+  const direct = spanForIntersections(horizontalIntersections(polygon, y), xHint);
+  if (direct) return direct;
+  const epsilon = 0.001;
+  return spanForIntersections(horizontalIntersections(polygon, y + epsilon), xHint)
+    || spanForIntersections(horizontalIntersections(polygon, y - epsilon), xHint);
+}
+
+export function verticalPolygonSpanAtX(
+  polygon: GeometryPoint[],
+  x: number,
+  yHint: number,
+): PolygonAxisSpan | null {
+  if (polygon.length < 3) return null;
+  const direct = spanForIntersections(verticalIntersections(polygon, x), yHint);
+  if (direct) return direct;
+  const epsilon = 0.001;
+  return spanForIntersections(verticalIntersections(polygon, x + epsilon), yHint)
+    || spanForIntersections(verticalIntersections(polygon, x - epsilon), yHint);
+}
+
+export function nearestGridIntersectionInsidePolygon(
+  polygon: GeometryPoint[],
+  origin: GeometryPoint,
+  pitchX: number,
+  pitchY: number,
+  target: GeometryPoint,
+  searchRadius = 12,
+): GeometryPoint {
+  if (pitchX <= 0 || pitchY <= 0 || polygon.length < 3) return target;
+  const baseX = Math.round((target.x - origin.x) / pitchX);
+  const baseY = Math.round((target.y - origin.y) / pitchY);
+  let best: GeometryPoint | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let radius = 0; radius <= searchRadius; radius += 1) {
+    for (let offsetX = -radius; offsetX <= radius; offsetX += 1) {
+      for (let offsetY = -radius; offsetY <= radius; offsetY += 1) {
+        if (radius > 0 && Math.max(Math.abs(offsetX), Math.abs(offsetY)) !== radius) continue;
+        const candidate = {
+          x: origin.x + (baseX + offsetX) * pitchX,
+          y: origin.y + (baseY + offsetY) * pitchY,
+        };
+        if (!pointInPolygon(candidate, polygon)) continue;
+        const candidateDistance = distanceBetween(candidate, target);
+        if (candidateDistance < bestDistance) {
+          best = candidate;
+          bestDistance = candidateDistance;
+        }
+      }
+    }
+    if (best) return best;
+  }
+
+  return constrainPointToPolygon(target, polygon);
+}
