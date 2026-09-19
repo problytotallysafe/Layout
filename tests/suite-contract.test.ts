@@ -53,6 +53,11 @@ test("canonical fixture converts through Layout and preserves unsupported Floorp
   assert.equal(parsed.ok, true);
   if (!parsed.ok) return;
   assert.equal(parsed.value.project.buildrProjectId, "suite-fixture-buildr-project-1");
+  const roomSummary = parsed.value.project.rooms[0].extensions?.roomSummary as
+    | { flooringSquareFeet?: number; materialSquareFeetWithWaste?: number }
+    | undefined;
+  assert.equal(roomSummary?.flooringSquareFeet, 80);
+  assert.equal(roomSummary?.materialSquareFeetWithWaste, 88);
   assert.equal(
     parsed.value.project.rooms[0].entities.some((entity) => entity.id === "toilet-1" && entity.kind === "object.toilet"),
     true,
