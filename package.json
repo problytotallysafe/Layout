@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:suite": "node --experimental-strip-types --test tests/suite-contract.test.ts tests/layout-sync.test.ts",
+    "test:suite": "node --experimental-strip-types --test tests/suite-contract.test.ts tests/layout-sync.test.ts tests/layout-geometry.test.ts tests/layout-engine.test.ts tests/layout-hosting.test.ts tests/layout-measurements.test.ts tests/layout-migration.test.ts tests/buildr-return.test.ts",
     "android:sync": "npm run build && cap sync android",
     "android:aab": "npm run android:sync && cd android && ./gradlew bundleRelease"
   },

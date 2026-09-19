@@ -27,7 +27,7 @@ async function currentUser() {
 export async function loadCloudLayouts(): Promise<SavedLayout[]> {
   const supabase = getSupabaseBrowserClient(), user = await currentUser();
   if (!supabase || !user) return [];
-  const { data, error } = await supabase.from("layout_documents").select("document").is("deleted_at", null).order("updated_at", { ascending: false });
+  const { data, error } = await supabase.from("layout_documents").select("document").eq("owner_id", user.id).is("deleted_at", null).order("updated_at", { ascending: false });
   if (error) throw error;
   return (data ?? []).map((row: { document: unknown }) => row.document as SavedLayout);
 }
@@ -35,7 +35,7 @@ export async function loadCloudLayouts(): Promise<SavedLayout[]> {
 export async function saveCloudLayouts(layouts: SavedLayout[]) {
   const supabase = getSupabaseBrowserClient(), user = await currentUser();
   if (!supabase || !user || !layouts.length) return { cloudSaved: false, conflicts: [] as LayoutConflict[] };
-  const { data: existing, error: loadError } = await supabase.from("layout_documents").select("id,document").in("id", layouts.map((layout) => layout.id));
+  const { data: existing, error: loadError } = await supabase.from("layout_documents").select("id,document").eq("owner_id", user.id).in("id", layouts.map((layout) => layout.id));
   if (loadError) throw loadError;
   const byId = new Map<string, SavedLayout>((existing ?? []).map((row: { id: string; document: unknown }) => [row.id, row.document as SavedLayout]));
   const conflicts: LayoutConflict[] = [];
@@ -52,7 +52,7 @@ export async function saveCloudLayouts(layouts: SavedLayout[]) {
     const { error } = await supabase.from("layout_documents").upsert(safe.map((document) => ({
       id: document.id, owner_id: user.id, name: document.projectName, schema_version: "layout.plan.v1", revision: document.revision,
       organization_id: document.suiteContext?.organizationId ?? null, document, updated_at: new Date(document.updatedAt).toISOString(),
-    })), { onConflict: "id" });
+    })), { onConflict: "owner_id,id" });
     if (error) throw error;
   }
   return { cloudSaved: true, conflicts };

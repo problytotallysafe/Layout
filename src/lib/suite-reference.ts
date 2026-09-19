@@ -67,6 +67,7 @@ export async function loadSuiteDrawingReference(
       ok: false,
       error: imported.error || "The shared drawing could not be opened.",
     };
+  imported.layout.id = `suite_${data.id}`;
   const context = (imported.layout.suiteContext || {
     organizationId: null,
     buildrProjectId: null,
@@ -141,6 +142,7 @@ export async function saveSuiteDrawingReference(
     };
   const imported = suiteToLayout(latest.data.document);
   if (imported.layout) {
+    imported.layout.id = layout.id;
     const remoteContext = (imported.layout.suiteContext || {
       organizationId: null,
       buildrProjectId: null,

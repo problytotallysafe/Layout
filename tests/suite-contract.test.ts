@@ -53,10 +53,146 @@ test("canonical fixture converts through Layout and preserves unsupported Floorp
   assert.equal(parsed.ok, true);
   if (!parsed.ok) return;
   assert.equal(parsed.value.project.buildrProjectId, "suite-fixture-buildr-project-1");
+  const roomSummary = parsed.value.project.rooms[0].extensions?.roomSummary as
+    | { flooringSquareFeet?: number; materialSquareFeetWithWaste?: number }
+    | undefined;
+  assert.equal(roomSummary?.flooringSquareFeet, 80);
+  assert.equal(roomSummary?.materialSquareFeetWithWaste, 88);
   assert.equal(
     parsed.value.project.rooms[0].entities.some((entity) => entity.id === "toilet-1" && entity.kind === "object.toilet"),
     true,
   );
+});
+
+test("opening host metadata round-trips without erasing Floorplan wall references", async () => {
+  const input = JSON.parse(await readFile(fixture, "utf8"));
+  const imported = suiteToLayout(input);
+  assert.ok(imported.layout);
+  if (!imported.layout) return;
+
+  const opening = imported.layout.items.find((item) => item.id === "opening-1");
+  assert.ok(opening);
+  assert.equal(
+    Boolean(opening?.hostId || opening?.hostEdgeIndex != null),
+    true,
+  );
+
+  const exported = layoutToSuite(imported.layout);
+  const exportedOpening = exported.project.rooms[0].entities.find(
+    (entity) => entity.id === "opening-1",
+  );
+  assert.ok(exportedOpening);
+  assert.equal(exportedOpening?.geometry.wallId, "wall-1");
+  assert.equal(
+    Boolean(
+      exportedOpening?.geometry.layoutHostEdgeIndex != null ||
+      exportedOpening?.geometry.wallId,
+    ),
+    true,
+  );
+
+  const reimported = suiteToLayout(exported);
+  const reopened = reimported.layout?.items.find((item) => item.id === "opening-1");
+  assert.ok(reopened);
+  assert.equal(Boolean(reopened?.hostId || reopened?.hostEdgeIndex != null), true);
+});
+
+test("standalone hosted openings survive suite export and import", () => {
+  const layout = {
+    id: "layout-host-test",
+    revision: 2,
+    updatedAt: Date.now(),
+    projectName: "Hosted opening test",
+    room: [
+      { x: 0, y: 0 },
+      { x: 120, y: 0 },
+      { x: 120, y: 96 },
+      { x: 0, y: 96 },
+    ],
+    items: [
+      {
+        id: "wall-host",
+        type: "wall" as const,
+        start: { x: 60, y: 0 },
+        end: { x: 60, y: 96 },
+        thickness: 4.5,
+      },
+      {
+        id: "opening-hosted",
+        type: "opening" as const,
+        start: { x: 60, y: 30 },
+        end: { x: 60, y: 66 },
+        thickness: 4.5,
+        hostId: "wall-host",
+        hostT: 0.5,
+      },
+    ],
+    tileWidth: 12,
+    tileHeight: 24,
+    grout: 0.125,
+    materialUnit: "in" as const,
+    materialType: "plank" as const,
+    tileAppearance: "wood" as const,
+    pattern: "straight" as const,
+    wastePercent: 10,
+    wallThickness: 4.5,
+    origin: { x: 0, y: 0 },
+    rotation: 0 as const,
+    showTile: true,
+    snapEnabled: true,
+    notes: "",
+  };
+
+  const exported = layoutToSuite(layout);
+  const reopened = suiteToLayout(exported);
+  const opening = reopened.layout?.items.find((item) => item.id === "opening-hosted");
+  assert.equal(opening?.hostId, "wall-host");
+  assert.ok(Math.abs((opening?.hostT ?? 0) - 0.5) < 0.001);
+  assert.equal(reopened.layout?.materialType, "plank");
+  assert.equal(reopened.layout?.tileAppearance, "wood");
+});
+
+test("editing one suite room preserves unrelated rooms", async () => {
+  const input = JSON.parse(await readFile(fixture, "utf8"));
+  input.project.rooms.push({
+    id: "suite-fixture-room-2",
+    name: "Hall",
+    displayUnit: "ft-in",
+    origin: { x: 0, y: 0 },
+    entities: [
+      {
+        id: "hall-boundary",
+        kind: "room.boundary",
+        geometry: {
+          vertices: [
+            { x: 0, y: 0 },
+            { x: 1219.2, y: 0 },
+            { x: 1219.2, y: 2438.4 },
+            { x: 0, y: 2438.4 },
+          ],
+        },
+      },
+      {
+        id: "hall-unknown",
+        kind: "object.custom",
+        geometry: { x: 300, y: 400 },
+        metadata: { preserveMe: true },
+      },
+    ],
+    extensions: { keep: "unchanged" },
+  });
+
+  const imported = suiteToLayout(input);
+  assert.ok(imported.layout);
+  if (!imported.layout) return;
+  imported.layout.roomName = "Primary Bath Updated";
+  const exported = layoutToSuite(imported.layout);
+  assert.equal(exported.project.rooms.length, 2);
+  assert.equal(exported.project.rooms[0].name, "Primary Bath Updated");
+  const hall = exported.project.rooms.find((room) => room.id === "suite-fixture-room-2");
+  assert.ok(hall);
+  assert.equal(hall?.extensions?.keep, "unchanged");
+  assert.equal(hall?.entities.some((entity) => entity.id === "hall-unknown"), true);
 });
 
 test("newer shared records open safely read-only", () => {

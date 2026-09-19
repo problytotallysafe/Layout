@@ -11,24 +11,80 @@ import { mergeLayouts, type LayoutConflict } from "@/lib/layout-sync";
 import { flushCloudDeletions, loadCloudLayouts, pendingCloudDeletions, queueCloudDeletion, saveCloudLayouts } from "@/lib/layout-store";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
 import { SuiteAccountButton } from "@/components/suite-account";
+import {
+  constrainPointToPolygon,
+  constrainPointToPolygonInset,
+  constrainSegmentToPolygonInset,
+  constrainSegmentTranslationToPolygonInset,
+  endpointAtAngle,
+  horizontalPolygonSpanAtY,
+  nearestGridIntersectionInsidePolygon,
+  nearestSnapPoint,
+  roundToIncrement,
+  segmentAngleDegrees,
+  snapToCommonAngle,
+  verticalPolygonSpanAtX,
+} from "@/lib/layout-geometry";
+import {
+  assessObstacleCuts,
+  assessPolygonLayout,
+  optimizePolygonLayout,
+  type CutObstacle,
+} from "@/lib/layout-engine";
+import { formatInchesInput, formatLength, parseLength } from "@/lib/layout-measurements";
+import {
+  attachOpeningToNearestHost,
+  moveHostedOpening,
+  removeItemWithDependents,
+  reflowRoomHostedOpenings,
+  reflowWallHostedOpenings,
+} from "@/lib/layout-hosting";
 
 export type Point = { x: number; y: number };
-export type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
+export type DrawItem = {
+  id: string;
+  type: "wall" | "opening";
+  start: Point;
+  end: Point;
+  thickness: number;
+  hostId?: string;
+  hostEdgeIndex?: number;
+  hostT?: number;
+};
 type Tool = "select" | "pan" | "floor" | "room" | "wall" | "opening";
 type MaterialUnit = "in" | "mm" | "cm";
-type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
-type CutObstacle = { coordinate: number; side: "before" | "after" };
+type MaterialType = "tile" | "plank";
+type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete" | "wood";
+type LayoutPattern = "straight" | "half-offset" | "third-offset";
 type DragState =
   | { kind: "draw"; start: Point; current: Point }
+  | { kind: "room-tap"; start: Point; current: Point }
   | { kind: "endpoint"; id: string; endpoint: "start" | "end" }
   | { kind: "item"; id: string; anchor: Point; originalStart: Point; originalEnd: Point }
   | { kind: "pan"; clientX: number; clientY: number; origin: Point }
   | { kind: "tile"; anchor: Point; originalOrigin: Point }
   | null;
-type Snapshot = { room: Point[]; items: DrawItem[] };
+type Snapshot = {
+  room: Point[];
+  items: DrawItem[];
+  tileWidth: number;
+  tileHeight: number;
+  grout: number;
+  materialUnit: MaterialUnit;
+  materialType: MaterialType;
+  tileAppearance: TileAppearance;
+  pattern: LayoutPattern;
+  wastePercent: number;
+  wallThickness: number;
+  origin: Point;
+  rotation: 0 | 90;
+  showTile: boolean;
+  snapEnabled: boolean;
+};
 type PinchState = { distance: number; zoom: number; canvasCenter: Point };
 export type LayoutData = Snapshot & {
   projectName: string;
+  roomName?: string;
   tileWidth: number;
   tileHeight: number;
   grout: number;
@@ -39,6 +95,8 @@ export type LayoutData = Snapshot & {
   origin: Point;
   rotation: 0 | 90;
   showTile: boolean;
+  snapEnabled: boolean;
+  notes?: string;
   archivedAt?: number;
   suiteContext?: { organizationId: string | null; buildrProjectId: string | null; importKey: string };
 };
@@ -59,49 +117,26 @@ const blankLayout = (id = uid(), projectName = "Untitled layout"): SavedLayout =
   revision: 1,
   updatedAt: Date.now(),
   projectName,
+  roomName: "Room 1",
   room: DEFAULT_ROOM.map((point) => ({ ...point })),
   items: [],
   tileWidth: 12,
   tileHeight: 24,
   grout: 0.125,
   materialUnit: "in",
+  materialType: "tile",
   tileAppearance: "transparent",
+  pattern: "straight",
   wastePercent: 10,
   wallThickness: 4.5,
   origin: { x: 0, y: 0 },
   rotation: 0,
   showTile: true,
+  snapEnabled: true,
+  notes: "",
 });
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const distance = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
-const formatLength = (inches: number) => {
-  const eighths = Math.max(0, Math.round(inches * 8));
-  const feet = Math.floor(eighths / 96);
-  const remainder = eighths % 96;
-  const wholeInches = Math.floor(remainder / 8);
-  const fraction = remainder % 8;
-  const divisor = fraction === 0 ? 1 : fraction % 4 === 0 ? 4 : fraction % 2 === 0 ? 2 : 1;
-  const fractionLabel = fraction ? ` ${fraction / divisor}/${8 / divisor}` : "";
-  return `${feet}′ ${wholeInches}${fractionLabel}″`;
-};
-const parseLength = (value: string) => {
-  const normalized = value.trim().toLowerCase().replace(/feet|foot|ft/g, "'").replace(/inches|inch|in/g, '"');
-  if (!normalized) return null;
-  if (!normalized.includes("'") && !normalized.includes('"')) {
-    const plain = Number(normalized);
-    return Number.isFinite(plain) ? plain : null;
-  }
-  const feetMatch = normalized.match(/(-?\d+(?:\.\d+)?)\s*'/);
-  const afterFeet = feetMatch ? normalized.slice((feetMatch.index ?? 0) + feetMatch[0].length) : normalized;
-  const inchMatch = afterFeet.match(/(-?\d+(?:\.\d+)?)(?:\s+(\d+)\/(\d+))?\s*"?/);
-  const fractionOnly = afterFeet.match(/(\d+)\/(\d+)/);
-  const feet = feetMatch ? Number(feetMatch[1]) : 0;
-  let inches = inchMatch ? Number(inchMatch[1]) : 0;
-  if (inchMatch?.[2] && inchMatch[3]) inches += Number(inchMatch[2]) / Number(inchMatch[3]);
-  else if (!inchMatch && fractionOnly) inches += Number(fractionOnly[1]) / Number(fractionOnly[2]);
-  const result = feet * 12 + inches;
-  return Number.isFinite(result) ? result : null;
-};
 const displayUnit = (inches: number, unit: MaterialUnit) => unit === "in" ? inches : unit === "mm" ? inches * 25.4 : inches * 2.54;
 const inchesFromUnit = (value: number, unit: MaterialUnit) => unit === "in" ? value : unit === "mm" ? value / 25.4 : value / 2.54;
 const polygonArea = (points: Point[]) => Math.abs(points.reduce((sum, point, index) => {
@@ -143,6 +178,23 @@ const constrainWallToBounds = (item: DrawItem, bounds: Bounds): DrawItem => item
   start: clampWallPoint(item.start, item.thickness, bounds),
   end: clampWallPoint(item.end, item.thickness, bounds),
 } : item;
+const constrainWallPointToRoom = (point: Point, thickness: number, room: Point[], bounds: Bounds) =>
+  constrainPointToPolygonInset(
+    clampWallPoint(constrainPointToPolygon(point, room), thickness, bounds),
+    room,
+    thickness / 2,
+  );
+const constrainWallToRoom = (item: DrawItem, room: Point[], bounds: Bounds): DrawItem => {
+  if (item.type !== "wall") return item;
+  const bounded = constrainWallToBounds(item, bounds);
+  const segment = constrainSegmentToPolygonInset(
+    bounded.start,
+    bounded.end,
+    room,
+    bounded.thickness / 2,
+  );
+  return { ...bounded, start: segment.start, end: segment.end };
+};
 const constrainWallTranslation = (item: DrawItem, dx: number, dy: number, bounds: Bounds) => {
   if (item.type !== "wall") return { dx, dy };
   const halfThickness = item.thickness / 2;
@@ -152,61 +204,67 @@ const constrainWallTranslation = (item: DrawItem, dx: number, dy: number, bounds
   const maxDy = bounds.maxY - halfThickness - Math.max(item.start.y, item.end.y);
   return { dx: clamp(dx, minDx, maxDx), dy: clamp(dy, minDy, maxDy) };
 };
+const constrainWallTranslationToRoom = (item: DrawItem, dx: number, dy: number, room: Point[], bounds: Bounds) => {
+  const bounded = constrainWallTranslation(item, dx, dy, bounds);
+  return item.type === "wall"
+    ? constrainSegmentTranslationToPolygonInset(item.start, item.end, bounded.dx, bounded.dy, room, item.thickness / 2)
+    : bounded;
+};
+const reconcileItemsWithRoom = (items: DrawItem[], nextRoom: Point[]) => {
+  const nextBounds = roomBounds(nextRoom);
+  let next = items.map((item) => item.type === "wall" ? constrainWallToRoom(item, nextRoom, nextBounds) : item);
+  next.filter((item) => item.type === "wall").forEach((wall) => {
+    next = reflowWallHostedOpenings(next, wall.id, wall);
+  });
+  return reflowRoomHostedOpenings(next, nextRoom);
+};
 const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, index) => {
   const next = room[(index + 1) % room.length];
   return point.x === next.x || point.y === next.y;
 });
 
-function cutAtBoundary(coordinate: number, tile: number, grout: number, rawOffset: number, side: CutObstacle["side"]) {
-  const pitch = tile + grout;
-  const phase = ((coordinate - rawOffset) % pitch + pitch) % pitch;
-  if (phase < 0.001 || phase >= tile - 0.001) return tile;
-  return side === "before" ? phase : tile - phase;
-}
-
-function assessAxis(span: number, tile: number, grout: number, rawOffset: number, obstacles: CutObstacle[]) {
-  const edges = edgeCuts(span, tile, grout, rawOffset);
-  const obstacleCuts = obstacles.map((obstacle) => cutAtBoundary(obstacle.coordinate, tile, grout, rawOffset, obstacle.side));
-  return { ...edges, minimum: Math.min(edges.left, edges.right, ...obstacleCuts) };
-}
-
-function balancedOffset(span: number, tile: number, grout: number, obstacles: CutObstacle[]) {
-  const pitch = tile + grout;
-  let best = { offset: 0, score: -Infinity, left: 0, right: 0, minimum: 0 };
-  for (let offset = -pitch; offset <= 0; offset += 0.125) {
-    const assessment = assessAxis(span, tile, grout, offset, obstacles);
-    const score = assessment.minimum * 100 - Math.abs(assessment.left - assessment.right);
-    if (score > best.score) best = { offset, score, ...assessment };
-  }
-  return best;
-}
-
-function edgeCuts(span: number, tile: number, grout: number, rawOffset: number) {
-  const pitch = tile + grout;
-  const offset = ((rawOffset % pitch) + pitch) % pitch - pitch;
-  const intersections: { start: number; end: number }[] = [];
-  for (let start = offset; start < span; start += pitch) {
-    const visibleStart = Math.max(0, start);
-    const visibleEnd = Math.min(span, start + tile);
-    if (visibleEnd > visibleStart) intersections.push({ start: visibleStart, end: visibleEnd });
-  }
-  if (!intersections.length) return { left: 0, right: 0 };
-  const last = intersections[intersections.length - 1];
-  return {
-    left: intersections[0].end - intersections[0].start,
-    right: last.end - last.start,
-  };
-}
-
-function NumberField({ label, value, onChange, suffix, min = 0, step = 1 }: {
-  label: string; value: number; onChange: (value: number) => void; suffix: string; min?: number; step?: number;
+function NumberField({ label, value, onChange, suffix, min = 0, step = 1, disabled = false }: {
+  label: string; value: number; onChange: (value: number) => void; suffix: string; min?: number; step?: number; disabled?: boolean;
 }) {
+  const fractionalInches = suffix === "in";
+  const displayValue = fractionalInches
+    ? formatInchesInput(value)
+    : Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
+  const commit = (input: HTMLInputElement) => {
+    if (disabled) return;
+    const parsed = fractionalInches ? parseLength(input.value) : Number(input.value);
+    if (parsed == null || !Number.isFinite(parsed) || parsed < min) {
+      input.value = displayValue;
+      return;
+    }
+    const next = Math.max(min, parsed);
+    input.value = fractionalInches ? formatInchesInput(next) : String(Number(next.toFixed(3)));
+    if (Math.abs(next - value) > 0.0005) onChange(next);
+  };
+
   return (
     <label className="field">
       <span>{label}</span>
       <span className="number-input">
-        <input aria-label={label} min={min} step={step} type="number" value={Number.isInteger(value) ? value : Number(value.toFixed(3))}
-          onChange={(event) => onChange(Math.max(min, Number(event.target.value) || 0))} />
+        <input
+          key={`${label}-${displayValue}-${disabled ? "disabled" : "editable"}`}
+          aria-label={label}
+          min={min}
+          step={step}
+          type={fractionalInches ? "text" : "number"}
+          disabled={disabled}
+          defaultValue={displayValue}
+          inputMode={fractionalInches ? "text" : "decimal"}
+          autoComplete="off"
+          onBlur={(event) => commit(event.currentTarget)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") {
+              event.currentTarget.value = displayValue;
+              event.currentTarget.blur();
+            }
+          }}
+        />
         <small>{suffix}</small>
       </span>
     </label>
@@ -235,6 +293,52 @@ function OffsetField({ inches, label, onCommit }: { inches: number; label: strin
   );
 }
 
+function LengthField({ label, value, onChange, min = 0, disabled = false }: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+  disabled?: boolean;
+}) {
+  const rounded = Math.round(value * 8) / 8;
+  const displayValue = formatLength(rounded);
+  const commit = (input: HTMLInputElement) => {
+    if (disabled) return;
+    const parsed = parseLength(input.value);
+    if (parsed == null || parsed < min) {
+      input.value = displayValue;
+      return;
+    }
+    const next = Math.round(parsed * 8) / 8;
+    input.value = formatLength(next);
+    if (Math.abs(next - value) > 0.0005) onChange(next);
+  };
+
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <span className="number-input">
+        <input
+          key={`${label}-${rounded}-${disabled ? "disabled" : "editable"}`}
+          aria-label={label}
+          disabled={disabled}
+          defaultValue={displayValue}
+          inputMode="text"
+          autoComplete="off"
+          onBlur={(event) => commit(event.currentTarget)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") {
+              event.currentTarget.value = displayValue;
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </span>
+    </label>
+  );
+}
+
 function WallOffsetLabel({ x, y, inches, side }: { x: number; y: number; inches: number; side: "left" | "right" | "top" | "bottom" }) {
   return (
     <g className="wall-offset-label" transform={`translate(${x} ${y})`}>
@@ -254,7 +358,8 @@ function mortarRecommendation(tileWidth: number, tileHeight: number) {
 }
 
 export function LayoutPlanner() {
-  const [projectName, setProjectName] = useState("Untitled bathroom");
+  const [projectName, setProjectName] = useState("Untitled layout");
+  const [roomName, setRoomName] = useState("Room 1");
   const [room, setRoom] = useState<Point[]>(DEFAULT_ROOM);
   const [draftRoom, setDraftRoom] = useState<Point[]>([]);
   const [items, setItems] = useState<DrawItem[]>([
@@ -263,21 +368,28 @@ export function LayoutPlanner() {
   ]);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedRoomEdge, setSelectedRoomEdge] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState>(null);
   const [tileWidth, setTileWidth] = useState(12);
   const [tileHeight, setTileHeight] = useState(24);
   const [grout, setGrout] = useState(0.125);
   const [materialUnit, setMaterialUnit] = useState<MaterialUnit>("in");
+  const [materialType, setMaterialType] = useState<MaterialType>("tile");
   const [tileAppearance, setTileAppearance] = useState<TileAppearance>("transparent");
+  const [pattern, setPattern] = useState<LayoutPattern>("straight");
   const [wastePercent, setWastePercent] = useState(10);
   const [wallThickness, setWallThickness] = useState(4.5);
   const [origin, setOrigin] = useState<Point>({ x: 0, y: 0 });
   const [rotation, setRotation] = useState<0 | 90>(0);
   const [showTile, setShowTile] = useState(true);
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [notes, setNotes] = useState("");
+  const [optimizationMessage, setOptimizationMessage] = useState<string | null>(null);
   const [suiteContext, setSuiteContext] = useState<LayoutData["suiteContext"]>();
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [saved, setSaved] = useState(true);
+  const [deviceSaveFailed, setDeviceSaveFailed] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>("device");
   const [conflicts, setConflicts] = useState<LayoutConflict[]>([]);
   const [activeLayoutId, setActiveLayoutId] = useState<string | null>(null);
@@ -310,11 +422,19 @@ export function LayoutPlanner() {
   const bounds = useMemo(() => roomBounds(room), [room]);
   const actualTileW = rotation === 0 ? tileWidth : tileHeight;
   const actualTileH = rotation === 0 ? tileHeight : tileWidth;
+  const pitchX = actualTileW + grout;
+  const pitchY = actualTileH + grout;
+  const patternRows = pattern === "half-offset" ? 2 : pattern === "third-offset" ? 3 : 1;
+  const patternPhasesX = useMemo(
+    () => Array.from({ length: patternRows }, (_, index) => index * pitchX / patternRows),
+    [patternRows, pitchX],
+  );
   const roomWidth = bounds.maxX - bounds.minX;
   const roomHeight = bounds.maxY - bounds.minY;
   const areaSqFt = polygonArea(room) / 144;
   const tileSqFt = (tileWidth * tileHeight) / 144;
   const wasteMultiplier = 1 + wastePercent / 100;
+  const materialAreaSqFt = areaSqFt * wasteMultiplier;
   const tileCount = tileSqFt ? Math.ceil((areaSqFt / tileSqFt) * wasteMultiplier) : 0;
   const mortar = mortarRecommendation(tileWidth, tileHeight);
   const mortarBags = Math.max(1, Math.ceil((areaSqFt * wasteMultiplier) / mortar.coverage));
@@ -357,38 +477,110 @@ export function LayoutPlanner() {
       yObstacles: nextY.filter(({ coordinate }) => coordinate > 0 && coordinate < roomHeight),
     };
   }, [items, bounds.minX, bounds.minY, roomWidth, roomHeight]);
-  const xCuts = useMemo(() => balancedOffset(roomWidth, actualTileW, grout, xObstacles), [roomWidth, actualTileW, grout, xObstacles]);
-  const yCuts = useMemo(() => balancedOffset(roomHeight, actualTileH, grout, yObstacles), [roomHeight, actualTileH, grout, yObstacles]);
-  const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles), [roomWidth, actualTileW, grout, origin.x, xObstacles]);
-  const currentYCuts = useMemo(() => assessAxis(roomHeight, actualTileH, grout, origin.y, yObstacles), [roomHeight, actualTileH, grout, origin.y, yObstacles]);
+  const currentXObstacleCut = useMemo(
+    () => assessObstacleCuts(actualTileW, grout, origin.x, xObstacles, patternPhasesX),
+    [actualTileW, grout, origin.x, patternPhasesX, xObstacles],
+  );
+  const currentYObstacleCut = useMemo(
+    () => assessObstacleCuts(actualTileH, grout, origin.y, yObstacles),
+    [actualTileH, grout, origin.y, yObstacles],
+  );
+  const currentPolygonCuts = useMemo(
+    () => assessPolygonLayout(
+      room,
+      actualTileW,
+      actualTileH,
+      grout,
+      { x: bounds.minX + origin.x, y: bounds.minY + origin.y },
+      patternRows,
+    ),
+    [actualTileH, actualTileW, bounds.minX, bounds.minY, grout, origin.x, origin.y, patternRows, room],
+  );
   const selected = items.find((item) => item.id === selectedId) ?? null;
+  const selectedOpeningHosted = Boolean(selected?.type === "opening" && (selected.hostId || selected.hostEdgeIndex != null));
+  const selectedEdgeStart = selectedRoomEdge == null ? null : room[selectedRoomEdge] ?? null;
+  const selectedEdgeEnd = selectedRoomEdge == null ? null : room[(selectedRoomEdge + 1) % room.length] ?? null;
   const dimensionedWall = tool === "select" && selected?.type === "wall" ? selected : null;
-  const minimumCut = Math.min(currentXCuts.minimum, currentYCuts.minimum);
+  const minimumCut = Math.min(
+    currentXObstacleCut,
+    currentYObstacleCut,
+    currentPolygonCuts.minimumBoundaryCut,
+  );
   const cutWarning = minimumCut < Math.min(actualTileW, actualTileH) / 2;
+  const hasAngledBoundary = room.some((point, index) => {
+    const next = room[(index + 1) % room.length];
+    return Math.abs(next.x - point.x) > 0.001 && Math.abs(next.y - point.y) > 0.001;
+  });
+  const layoutNeedsReview = cutWarning;
+
+  const currentSnapshot = useCallback((): Snapshot => ({
+    room,
+    items,
+    tileWidth,
+    tileHeight,
+    grout,
+    materialUnit,
+    materialType,
+    tileAppearance,
+    pattern,
+    wastePercent,
+    wallThickness,
+    origin,
+    rotation,
+    showTile,
+    snapEnabled,
+  }), [grout, items, materialType, materialUnit, origin, pattern, room, rotation, showTile, snapEnabled, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   const snapshot = useCallback(() => {
-    setHistory((current) => [...current.slice(-29), { room, items }]);
+    setHistory((current) => [...current.slice(-29), currentSnapshot()]);
     setFuture([]);
+    setOptimizationMessage(null);
     setSaved(false);
-  }, [room, items]);
+  }, [currentSnapshot]);
+
+  const restoreSnapshot = useCallback((state: Snapshot) => {
+    setRoom(state.room);
+    setItems(state.items);
+    setTileWidth(state.tileWidth);
+    setTileHeight(state.tileHeight);
+    setGrout(state.grout);
+    setMaterialUnit(state.materialUnit);
+    setMaterialType(state.materialType);
+    setTileAppearance(state.tileAppearance);
+    setPattern(state.pattern);
+    setWastePercent(state.wastePercent);
+    setWallThickness(state.wallThickness);
+    setOrigin(state.origin);
+    setRotation(state.rotation);
+    setShowTile(state.showTile);
+    setSnapEnabled(state.snapEnabled);
+    setSelectedId(null);
+    setDrag(null);
+    setSaved(false);
+  }, []);
 
   const applyLayout = useCallback((layout: SavedLayout) => {
-    const restoredBounds = roomBounds(layout.room);
     setProjectName(layout.projectName);
+    setRoomName(layout.roomName || "Room 1");
     setRoom(layout.room);
-    setItems(layout.items.map((item) => constrainWallToBounds(item, restoredBounds)));
+    setItems(reconcileItemsWithRoom(layout.items, layout.room));
     setTileWidth(layout.tileWidth);
     setTileHeight(layout.tileHeight);
     setGrout(layout.grout);
     setMaterialUnit(layout.materialUnit);
+    setMaterialType(layout.materialType || "tile");
     setTileAppearance(layout.tileAppearance);
+    setPattern(layout.pattern || "straight");
     setWastePercent(layout.wastePercent);
     setWallThickness(layout.wallThickness);
     setOrigin(layout.origin);
     setRotation(layout.rotation);
     setShowTile(layout.showTile);
+    setSnapEnabled(layout.snapEnabled !== false);
+    setNotes(layout.notes || "");
     setSuiteContext(layout.suiteContext);
     setSelectedId(null);
+    setSelectedRoomEdge(null);
     setDraftRoom([]);
     setTool("select");
     setZoom(1);
@@ -400,8 +592,17 @@ export function LayoutPlanner() {
   const persistLibrary = useCallback((layouts: SavedLayout[], activeId: string) => {
     savedLayoutsRef.current = layouts;
     setSavedLayouts(layouts);
-    window.localStorage.setItem(LIBRARY_KEY, JSON.stringify(layouts));
-    window.localStorage.setItem(ACTIVE_LAYOUT_KEY, activeId);
+    try {
+      window.localStorage.setItem(LIBRARY_KEY, JSON.stringify(layouts));
+      window.localStorage.setItem(ACTIVE_LAYOUT_KEY, activeId);
+      window.dispatchEvent(new CustomEvent("buildr:layout-saved", { detail: { activeId } }));
+      setDeviceSaveFailed(false);
+      return true;
+    } catch {
+      setDeviceSaveFailed(true);
+      setSaved(false);
+      return false;
+    }
   }, []);
 
   const saveCurrentLayout = useCallback(() => {
@@ -412,34 +613,45 @@ export function LayoutPlanner() {
       revision: (existing?.revision ?? 0) + 1,
       updatedAt: Date.now(),
       projectName: projectName.trim() || "Untitled layout",
+      roomName: roomName.trim() || "Room 1",
       room,
       items,
       tileWidth,
       tileHeight,
       grout,
       materialUnit,
+      materialType,
       tileAppearance,
+      pattern,
       wastePercent,
       wallThickness,
       origin,
       rotation,
       showTile,
+      snapEnabled,
+      notes,
       suiteContext,
     };
     const existingIndex = savedLayoutsRef.current.findIndex((layout) => layout.id === activeLayoutId);
     const next = existingIndex >= 0
       ? savedLayoutsRef.current.map((layout) => layout.id === activeLayoutId ? document : layout)
       : [document, ...savedLayoutsRef.current];
-    persistLibrary(next, activeLayoutId);
-    window.localStorage.setItem(LEGACY_DRAFT_KEY, JSON.stringify(document));
+    if (!persistLibrary(next, activeLayoutId)) return null;
+    try {
+      window.localStorage.setItem(LEGACY_DRAFT_KEY, JSON.stringify(document));
+    } catch {
+      // The primary library write succeeded; the legacy recovery copy is best-effort only.
+    }
     setSaved(true);
     return document;
-  }, [activeLayoutId, grout, items, materialUnit, origin, persistLibrary, projectName, room, rotation, showTile, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
+  }, [activeLayoutId, grout, items, materialType, materialUnit, notes, origin, pattern, persistLibrary, projectName, room, roomName, rotation, showTile, snapEnabled, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      let recoveryRaw: string | null = null;
       try {
         const storedLibrary = window.localStorage.getItem(LIBRARY_KEY);
+        recoveryRaw = storedLibrary;
         const parsedLibrary = storedLibrary ? JSON.parse(storedLibrary) as Partial<SavedLayout>[] : [];
         let layouts = Array.isArray(parsedLibrary) ? parsedLibrary.filter((layout) => layout.id && layout.room?.length && Array.isArray(layout.items)).map((layout) => {
           const defaults = blankLayout(layout.id, layout.projectName || "Untitled layout");
@@ -450,7 +662,7 @@ export function LayoutPlanner() {
             ...layout,
             id: layout.id as string,
             room: restoredRoom,
-            items: (layout.items || []).map((item) => constrainWallToBounds(item, restoredBounds)),
+            items: (layout.items || []).map((item) => constrainWallToRoom(item, restoredRoom, restoredBounds)),
           } as SavedLayout;
         }) : [];
         if (!layouts.length) {
@@ -463,7 +675,7 @@ export function LayoutPlanner() {
               ...migrated,
               ...legacy,
               room: restoredRoom,
-              items: (legacy.items || []).map((item) => constrainWallToBounds(item, roomBounds(restoredRoom))),
+              items: (legacy.items || []).map((item) => constrainWallToRoom(item, restoredRoom, roomBounds(restoredRoom))),
             }];
           } else layouts = [blankLayout()];
         }
@@ -473,6 +685,13 @@ export function LayoutPlanner() {
         setActiveLayoutId(active.id);
         applyLayout(active);
       } catch {
+        if (recoveryRaw) {
+          try {
+            window.localStorage.setItem(`layout-library-recovery-${Date.now()}`, recoveryRaw);
+          } catch {
+            // If storage itself is unavailable, keep the in-memory fallback and surface the save failure.
+          }
+        }
         const fallback = blankLayout();
         persistLibrary([fallback], fallback.id);
         setActiveLayoutId(fallback.id);
@@ -483,6 +702,12 @@ export function LayoutPlanner() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [applyLayout, persistLibrary]);
+
+  useEffect(() => {
+    const saveNow = () => { saveCurrentLayout(); };
+    window.addEventListener("buildr:save-now", saveNow);
+    return () => window.removeEventListener("buildr:save-now", saveNow);
+  }, [saveCurrentLayout]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -564,11 +789,11 @@ export function LayoutPlanner() {
     saveCurrentLayout();
     const nextLayout = blankLayout();
     const next = [nextLayout, ...savedLayoutsRef.current];
-    persistLibrary(next, nextLayout.id);
+    const stored = persistLibrary(next, nextLayout.id);
     setActiveLayoutId(nextLayout.id);
     applyLayout(nextLayout);
     setLibraryOpen(false);
-    setSaved(true);
+    setSaved(stored);
   };
 
   const openSavedLayout = (id: string) => {
@@ -576,10 +801,10 @@ export function LayoutPlanner() {
     const layout = savedLayoutsRef.current.find((candidate) => candidate.id === id);
     if (!layout) return;
     setActiveLayoutId(layout.id);
-    window.localStorage.setItem(ACTIVE_LAYOUT_KEY, layout.id);
+    const stored = persistLibrary(savedLayoutsRef.current, layout.id);
     applyLayout(layout);
     setLibraryOpen(false);
-    setSaved(true);
+    setSaved(stored);
   };
 
   const duplicateSavedLayout = (id: string) => {
@@ -597,11 +822,11 @@ export function LayoutPlanner() {
       updatedAt: Date.now(),
     };
     const next = [duplicate, ...savedLayoutsRef.current];
-    persistLibrary(next, duplicate.id);
+    const stored = persistLibrary(next, duplicate.id);
     setActiveLayoutId(duplicate.id);
     applyLayout(duplicate);
     setLibraryOpen(false);
-    setSaved(true);
+    setSaved(stored);
   };
 
   const deleteSavedLayout = (id: string) => {
@@ -610,7 +835,7 @@ export function LayoutPlanner() {
     let next = savedLayoutsRef.current.filter((layout) => layout.id !== id);
     if (!next.length) next = [blankLayout()];
     const nextActive = id === activeLayoutId ? next[0] : next.find((layout) => layout.id === activeLayoutId) || next[0];
-    persistLibrary(next, nextActive.id);
+    const stored = persistLibrary(next, nextActive.id);
     queueCloudDeletion(id);
     if (navigator.onLine) void flushCloudDeletions().then((complete) => {
       if (!complete) setSyncState("failed");
@@ -619,7 +844,7 @@ export function LayoutPlanner() {
       setActiveLayoutId(nextActive.id);
       applyLayout(nextActive);
     }
-    setSaved(true);
+    setSaved(stored);
   };
 
   const toggleArchivedLayout = (id: string) => {
@@ -638,10 +863,10 @@ export function LayoutPlanner() {
       nextActive = blankLayout();
       next.unshift(nextActive);
     }
-    persistLibrary(next, nextActive.id);
+    const stored = persistLibrary(next, nextActive.id);
     setActiveLayoutId(nextActive.id);
     applyLayout(nextActive);
-    setSaved(true);
+    setSaved(stored);
     if (navigator.onLine) void saveCloudLayouts([changed]).then((result) => {
       setSyncState(result.conflicts.length ? "conflict" : result.cloudSaved ? "saved" : "device");
     }).catch(() => setSyncState("failed"));
@@ -680,21 +905,55 @@ export function LayoutPlanner() {
     const visibleW = VIEW_W / zoom;
     const visibleH = VIEW_H / zoom;
     return {
-      x: Math.round(clamp(pan.x + (clientX - rect.left) * visibleW / rect.width, 0, VIEW_W)),
-      y: Math.round(clamp(pan.y + (clientY - rect.top) * visibleH / rect.height, 0, VIEW_H)),
+      x: roundToIncrement(clamp(pan.x + (clientX - rect.left) * visibleW / rect.width, 0, VIEW_W)),
+      y: roundToIncrement(clamp(pan.y + (clientY - rect.top) * visibleH / rect.height, 0, VIEW_H)),
     };
   };
   const pointerPoint = (event: React.PointerEvent<SVGSVGElement>) => clientPoint(event.clientX, event.clientY);
 
-  const changeZoom = (nextZoom: number) => {
+  const changeZoom = (nextZoom: number, anchorClient?: Point) => {
     const clampedZoom = clamp(nextZoom, 0.75, 2.5);
-    const center = { x: pan.x + VIEW_W / zoom / 2, y: pan.y + VIEW_H / zoom / 2 };
+    const rect = svgRef.current?.getBoundingClientRect();
+    const currentVisible = { x: VIEW_W / zoom, y: VIEW_H / zoom };
     const nextVisible = { x: VIEW_W / clampedZoom, y: VIEW_H / clampedZoom };
-    setPan({
-      x: clamp(center.x - nextVisible.x / 2, 0, Math.max(0, VIEW_W - nextVisible.x)),
-      y: clamp(center.y - nextVisible.y / 2, 0, Math.max(0, VIEW_H - nextVisible.y)),
-    });
+    if (anchorClient && rect) {
+      const fractionX = clamp((anchorClient.x - rect.left) / rect.width, 0, 1);
+      const fractionY = clamp((anchorClient.y - rect.top) / rect.height, 0, 1);
+      const anchor = {
+        x: pan.x + fractionX * currentVisible.x,
+        y: pan.y + fractionY * currentVisible.y,
+      };
+      setPan({
+        x: clamp(anchor.x - fractionX * nextVisible.x, 0, Math.max(0, VIEW_W - nextVisible.x)),
+        y: clamp(anchor.y - fractionY * nextVisible.y, 0, Math.max(0, VIEW_H - nextVisible.y)),
+      });
+    } else {
+      const center = {
+        x: pan.x + currentVisible.x / 2,
+        y: pan.y + currentVisible.y / 2,
+      };
+      setPan({
+        x: clamp(center.x - nextVisible.x / 2, 0, Math.max(0, VIEW_W - nextVisible.x)),
+        y: clamp(center.y - nextVisible.y / 2, 0, Math.max(0, VIEW_H - nextVisible.y)),
+      });
+    }
     setZoom(clampedZoom);
+  };
+
+  const fitRoom = () => {
+    const margin = 10;
+    const width = Math.max(1, roomWidth + margin * 2);
+    const height = Math.max(1, roomHeight + margin * 2);
+    const nextZoom = clamp(Math.min(VIEW_W / width, VIEW_H / height), 0.75, 2.5);
+    const visibleW = VIEW_W / nextZoom;
+    const visibleH = VIEW_H / nextZoom;
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerY = (bounds.minY + bounds.maxY) / 2;
+    setZoom(nextZoom);
+    setPan({
+      x: clamp(centerX - visibleW / 2, 0, Math.max(0, VIEW_W - visibleW)),
+      y: clamp(centerY - visibleH / 2, 0, Math.max(0, VIEW_H - visibleH)),
+    });
   };
 
   const beginPointerTracking = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -746,19 +1005,35 @@ export function LayoutPlanner() {
 
   const startDrawing = (event: React.PointerEvent<SVGSVGElement>) => {
     if (pinchRef.current) return;
+    setSelectedRoomEdge(null);
     const rawPoint = pointerPoint(event);
-    const point = tool === "wall" ? clampWallPoint(rawPoint, wallThickness, bounds) : rawPoint;
+    const roomPoint = constrainPointToPolygon(rawPoint, room);
+    const point = tool === "wall" ? constrainWallPointToRoom(roomPoint, wallThickness, room, bounds) : rawPoint;
     if (tool === "pan") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setDrag({ kind: "pan", clientX: event.clientX, clientY: event.clientY, origin: pan });
       return;
     }
     if (tool === "floor") {
+      snapshot();
       event.currentTarget.setPointerCapture(event.pointerId);
       setDrag({ kind: "tile", anchor: point, originalOrigin: origin });
       return;
     }
-    if (tool === "room") { setDraftRoom((current) => [...current, point]); return; }
+    if (tool === "room") {
+      if (event.pointerType === "touch") {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setDrag({ kind: "room-tap", start: point, current: point });
+        return;
+      }
+      setDraftRoom((current) => {
+        const previous = current.at(-1);
+        if (!previous || !snapEnabled || event.altKey) return [...current, point];
+        const closeToStart = current.length >= 3 ? nearestSnapPoint(point, [current[0]], 3) : { point, snapped: false };
+        return [...current, closeToStart.snapped ? closeToStart.point : snapToCommonAngle(previous, point)];
+      });
+      return;
+    }
     if (tool === "wall" || tool === "opening") {
       event.currentTarget.setPointerCapture(event.pointerId);
       setDrag({ kind: "draw", start: point, current: point });
@@ -780,7 +1055,21 @@ export function LayoutPlanner() {
       return;
     }
     const rawPoint = pointerPoint(event);
-    const point = drag.kind === "draw" && tool === "wall" ? clampWallPoint(rawPoint, wallThickness, bounds) : rawPoint;
+    const roomPoint = constrainPointToPolygon(rawPoint, room);
+    const point = drag.kind === "draw" && tool === "wall" ? constrainWallPointToRoom(roomPoint, wallThickness, room, bounds) : rawPoint;
+    if (drag.kind === "room-tap") {
+      const previous = draftRoom.at(-1);
+      const closeToStart = draftRoom.length >= 3
+        ? nearestSnapPoint(point, [draftRoom[0]], 3)
+        : { point, snapped: false };
+      const snapped = !previous || !snapEnabled
+        ? point
+        : closeToStart.snapped
+          ? closeToStart.point
+          : snapToCommonAngle(previous, point);
+      setDrag({ ...drag, current: snapped });
+      return;
+    }
     if (drag.kind === "tile") {
       setOrigin({
         x: drag.originalOrigin.x + point.x - drag.anchor.x,
@@ -789,39 +1078,90 @@ export function LayoutPlanner() {
       return;
     }
     if (drag.kind === "draw") {
-      const dx = Math.abs(point.x - drag.start.x);
-      const dy = Math.abs(point.y - drag.start.y);
-      const snapped = !event.altKey ? (dx > dy ? { x: point.x, y: drag.start.y } : { x: drag.start.x, y: point.y }) : point;
+      const candidates = [
+        ...room,
+        ...items.flatMap((item) => [item.start, item.end]),
+      ];
+      const nearby = snapEnabled && !event.altKey
+        ? nearestSnapPoint(point, candidates, 3)
+        : { point, snapped: false };
+      const rawSnapped = nearby.snapped
+        ? nearby.point
+        : snapEnabled && !event.altKey
+          ? snapToCommonAngle(drag.start, point)
+          : point;
+      const snapped = tool === "wall"
+        ? constrainSegmentToPolygonInset(drag.start, rawSnapped, room, wallThickness / 2).end
+        : rawSnapped;
       setDrag({ ...drag, current: snapped });
       return;
     }
     if (drag.kind === "item") {
       const requestedDx = point.x - drag.anchor.x;
       const requestedDy = point.y - drag.anchor.y;
-      setItems((current) => current.map((item) => item.id === drag.id ? {
-        ...item,
-        ...(() => {
-          const original = { ...item, start: drag.originalStart, end: drag.originalEnd };
-          const delta = constrainWallTranslation(original, requestedDx, requestedDy, bounds);
-          return {
-            start: { x: drag.originalStart.x + delta.dx, y: drag.originalStart.y + delta.dy },
-            end: { x: drag.originalEnd.x + delta.dx, y: drag.originalEnd.y + delta.dy },
+      setItems((current) => {
+        const moving = current.find((item) => item.id === drag.id);
+        if (!moving) return current;
+        if (moving.type === "opening" && (moving.hostId || moving.hostEdgeIndex != null)) {
+          const requestedCenter = {
+            x: (drag.originalStart.x + drag.originalEnd.x) / 2 + requestedDx,
+            y: (drag.originalStart.y + drag.originalEnd.y) / 2 + requestedDy,
           };
-        })(),
-      } : item));
+          const updated = moveHostedOpening(moving, current, room, requestedCenter);
+          return current.map((item) => item.id === moving.id ? updated : item);
+        }
+        const original = { ...moving, start: drag.originalStart, end: drag.originalEnd };
+        const delta = moving.type === "wall"
+          ? constrainWallTranslationToRoom(original, requestedDx, requestedDy, room, bounds)
+          : constrainWallTranslation(original, requestedDx, requestedDy, bounds);
+        const updated = {
+          ...moving,
+          start: { x: drag.originalStart.x + delta.dx, y: drag.originalStart.y + delta.dy },
+          end: { x: drag.originalEnd.x + delta.dx, y: drag.originalEnd.y + delta.dy },
+        };
+        return moving.type === "wall"
+          ? reflowWallHostedOpenings(current, moving.id, updated)
+          : current.map((item) => item.id === moving.id ? updated : item);
+      });
       return;
     }
-    setItems((current) => current.map((item) => {
-      if (item.id !== drag.id) return item;
+    setItems((current) => {
+      const item = current.find((candidate) => candidate.id === drag.id);
+      if (!item) return current;
       const other = drag.endpoint === "start" ? item.end : item.start;
-      const boundedPoint = item.type === "wall" ? clampWallPoint(point, item.thickness, bounds) : point;
-      const dx = Math.abs(boundedPoint.x - other.x);
-      const dy = Math.abs(boundedPoint.y - other.y);
-      const snapped = item.type === "wall" && !event.altKey
-        ? (dx > dy ? { x: boundedPoint.x, y: other.y } : { x: other.x, y: boundedPoint.y })
-        : boundedPoint;
-      return { ...item, [drag.endpoint]: snapped };
-    }));
+      const polygonPoint = item.type === "wall" ? constrainPointToPolygon(point, room) : point;
+      const boundedPoint = item.type === "wall" ? clampWallPoint(polygonPoint, item.thickness, bounds) : point;
+      const candidates = [
+        ...room,
+        ...current.filter((candidate) => candidate.id !== item.id).flatMap((candidate) => [candidate.start, candidate.end]),
+      ];
+      const nearby = snapEnabled && !event.altKey
+        ? nearestSnapPoint(boundedPoint, candidates, 3)
+        : { point: boundedPoint, snapped: false };
+      const rawSnapped = nearby.snapped
+        ? nearby.point
+        : snapEnabled && !event.altKey
+          ? snapToCommonAngle(other, boundedPoint)
+          : boundedPoint;
+      const snapped = item.type === "wall"
+        ? constrainSegmentToPolygonInset(other, rawSnapped, room, item.thickness / 2).end
+        : rawSnapped;
+      let updated: DrawItem = { ...item, [drag.endpoint]: snapped };
+      if (item.type === "opening" && (item.hostId || item.hostEdgeIndex != null)) {
+        updated = moveHostedOpening(
+          updated,
+          current,
+          room,
+          {
+            x: (updated.start.x + updated.end.x) / 2,
+            y: (updated.start.y + updated.end.y) / 2,
+          },
+        );
+      }
+      return item.type === "wall"
+        ? reflowWallHostedOpenings(current, item.id, updated)
+        : current.map((candidate) => candidate.id === item.id ? updated : candidate);
+    });
   };
 
   const endPointer = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -832,10 +1172,15 @@ export function LayoutPlanner() {
       return;
     }
     if (!drag) return;
+    if (drag.kind === "room-tap") {
+      setDraftRoom((current) => [...current, drag.current]);
+    }
     if (drag.kind === "draw" && distance(drag.start, drag.current) >= 3) {
       snapshot();
       const rawNext: DrawItem = { id: uid(), type: tool === "opening" ? "opening" : "wall", start: drag.start, end: drag.current, thickness: wallThickness };
-      const next = constrainWallToBounds(rawNext, bounds);
+      const next = rawNext.type === "opening"
+        ? attachOpeningToNearestHost(rawNext, items, room)
+        : constrainWallToRoom(rawNext, room, bounds);
       setItems((current) => [...current, next]);
       setSelectedId(next.id);
       setTool("select");
@@ -854,6 +1199,7 @@ export function LayoutPlanner() {
     event.stopPropagation();
     snapshot();
     setSelectedId(item.id);
+    setSelectedRoomEdge(null);
     svgRef.current?.setPointerCapture(event.pointerId);
     setDrag({ kind: "item", id: item.id, anchor: clientPoint(event.clientX, event.clientY), originalStart: item.start, originalEnd: item.end });
   };
@@ -861,14 +1207,40 @@ export function LayoutPlanner() {
     if (draftRoom.length < 3) return;
     snapshot();
     setRoom(draftRoom);
-    setItems((current) => current.map((item) => constrainWallToBounds(item, roomBounds(draftRoom))));
+    setItems((current) => reconcileItemsWithRoom(current, draftRoom));
     setDraftRoom([]);
     setTool("select");
   };
   const cancelRoom = () => { setDraftRoom([]); setTool("select"); };
-  const autoBalance = () => setOrigin({ x: xCuts.offset, y: yCuts.offset });
+  const autoBalance = () => {
+    snapshot();
+    const optimized = optimizePolygonLayout(
+      room,
+      actualTileW,
+      actualTileH,
+      grout,
+      { x: bounds.minX, y: bounds.minY },
+      xObstacles,
+      yObstacles,
+      patternRows,
+    );
+    const deltaX = optimized.offset.x - origin.x;
+    const deltaY = optimized.offset.y - origin.y;
+    const improvement = optimized.minimum - minimumCut;
+    setOrigin(optimized.offset);
+    if (improvement > 0.0625) {
+      setOptimizationMessage(
+        `Shifted reference ${formatLength(Math.abs(deltaX))} ${deltaX < 0 ? "left" : "right"} and ${formatLength(Math.abs(deltaY))} ${deltaY < 0 ? "up" : "down"}. Smallest planned cut improves from ${formatLength(minimumCut)} to ${formatLength(optimized.minimum)}.`,
+      );
+    } else {
+      setOptimizationMessage(
+        `This reference position is already close to the best balanced result. Smallest planned cut is about ${formatLength(optimized.minimum)}.`,
+      );
+    }
+  };
   const favorOpening = () => {
     if (!selected || selected.type !== "opening") return;
+    snapshot();
     const horizontal = Math.abs(selected.end.x - selected.start.x) >= Math.abs(selected.end.y - selected.start.y);
     const midpoint = {
       x: (selected.start.x + selected.end.x) / 2,
@@ -881,16 +1253,83 @@ export function LayoutPlanner() {
 
   const updateSelectedLength = (nextLength: number) => {
     if (!selected || nextLength <= 0) return;
-    const currentLength = distance(selected.start, selected.end) || 1;
-    const scale = nextLength / currentLength;
-    setItems((current) => current.map((item) => {
-      if (item.id !== selected.id) return item;
-      const end = {
+    snapshot();
+    setItems((current) => {
+      const item = current.find((candidate) => candidate.id === selected.id);
+      if (!item) return current;
+      const currentLength = distance(item.start, item.end) || 1;
+      const scale = nextLength / currentLength;
+      const rawEnd = {
         x: item.start.x + (item.end.x - item.start.x) * scale,
         y: item.start.y + (item.end.y - item.start.y) * scale,
       };
-      return { ...item, end: item.type === "wall" ? clampWallPoint(end, item.thickness, bounds) : end };
-    }));
+      const wallSegment = item.type === "wall"
+        ? constrainSegmentToPolygonInset(item.start, rawEnd, room, item.thickness / 2)
+        : null;
+      let updated: DrawItem = {
+        ...item,
+        start: wallSegment?.start ?? item.start,
+        end: wallSegment?.end ?? rawEnd,
+      };
+      if (item.type === "opening" && (item.hostId || item.hostEdgeIndex != null)) {
+        updated = moveHostedOpening(updated, current, room, {
+          x: (item.start.x + item.end.x) / 2,
+          y: (item.start.y + item.end.y) / 2,
+        });
+      }
+      return item.type === "wall"
+        ? reflowWallHostedOpenings(current, item.id, updated)
+        : current.map((candidate) => candidate.id === item.id ? updated : candidate);
+    });
+  };
+  const detachSelectedOpening = () => {
+    if (!selected || selected.type !== "opening" || !selectedOpeningHosted) return;
+    snapshot();
+    setItems((current) => current.map((item) => item.id === selected.id ? {
+      ...item,
+      hostId: undefined,
+      hostEdgeIndex: undefined,
+      hostT: undefined,
+    } : item));
+  };
+
+  const updateSelectedThickness = (value: number) => {
+    if (!selected || selectedOpeningHosted) return;
+    snapshot();
+    setItems((current) => {
+      const item = current.find((candidate) => candidate.id === selected.id);
+      if (!item) return current;
+      const updated = item.type === "wall"
+        ? constrainWallToRoom({ ...item, thickness: value }, room, bounds)
+        : { ...item, thickness: value };
+      return item.type === "wall"
+        ? reflowWallHostedOpenings(current, item.id, updated)
+        : current.map((candidate) => candidate.id === item.id ? updated : candidate);
+    });
+  };
+
+  const updateSelectedAngle = (degrees: number) => {
+    if (!selected) return;
+    snapshot();
+    setItems((current) => {
+      const item = current.find((candidate) => candidate.id === selected.id);
+      if (!item) return current;
+      const rawEnd = endpointAtAngle(item.start, distance(item.start, item.end), degrees);
+      const wallSegment = item.type === "wall"
+        ? constrainSegmentToPolygonInset(item.start, rawEnd, room, item.thickness / 2)
+        : null;
+      const updated: DrawItem = {
+        ...item,
+        start: wallSegment?.start ?? item.start,
+        end: wallSegment?.end ?? rawEnd,
+        ...(item.type === "opening"
+          ? { hostId: undefined, hostEdgeIndex: undefined, hostT: undefined }
+          : {}),
+      };
+      return item.type === "wall"
+        ? reflowWallHostedOpenings(current, item.id, updated)
+        : current.map((candidate) => candidate.id === item.id ? updated : candidate);
+    });
   };
   const resizeRectangle = (axis: "width" | "height", value: number) => {
     if (!isRectangle(room) || value < 24) return;
@@ -900,34 +1339,138 @@ export function LayoutPlanner() {
       x: axis === "width" && point.x === b.maxX ? b.minX + value : point.x,
       y: axis === "height" && point.y === b.maxY ? b.minY + value : point.y,
     }));
-    const nextBounds = roomBounds(nextRoom);
     setRoom(nextRoom);
-    setItems((current) => current.map((item) => constrainWallToBounds(item, nextBounds)));
+    setItems((current) => reconcileItemsWithRoom(current, nextRoom));
   };
-  const undo = () => {
-    const previous = history.at(-1); if (!previous) return;
-    setFuture((current) => [{ room, items }, ...current]); setHistory((current) => current.slice(0, -1));
-    setRoom(previous.room); setItems(previous.items); setSelectedId(null);
+
+  const updateRoomEdgeLength = (value: number) => {
+    if (selectedRoomEdge == null || value <= 0 || !room[selectedRoomEdge]) return;
+    const start = room[selectedRoomEdge];
+    const nextIndex = (selectedRoomEdge + 1) % room.length;
+    const end = room[nextIndex];
+    if (isRectangle(room)) {
+      const horizontal = Math.abs(end.x - start.x) >= Math.abs(end.y - start.y);
+      resizeRectangle(horizontal ? "width" : "height", value);
+      return;
+    }
+    snapshot();
+    const nextPoint = endpointAtAngle(start, value, segmentAngleDegrees(start, end));
+    const nextRoom = room.map((point, index) => index === nextIndex ? nextPoint : point);
+    setRoom(nextRoom);
+    setItems((current) => reconcileItemsWithRoom(current, nextRoom));
   };
-  const redo = () => {
-    const next = future[0]; if (!next) return;
-    setHistory((current) => [...current, { room, items }]); setFuture((current) => current.slice(1));
-    setRoom(next.room); setItems(next.items); setSelectedId(null);
+
+  const updateRoomEdgeAngle = (degrees: number) => {
+    if (selectedRoomEdge == null || !room[selectedRoomEdge]) return;
+    const start = room[selectedRoomEdge];
+    const nextIndex = (selectedRoomEdge + 1) % room.length;
+    const end = room[nextIndex];
+    snapshot();
+    const nextPoint = endpointAtAngle(start, distance(start, end), degrees);
+    const nextRoom = room.map((point, index) => index === nextIndex ? nextPoint : point);
+    setRoom(nextRoom);
+    setItems((current) => reconcileItemsWithRoom(current, nextRoom));
   };
+  const undo = useCallback(() => {
+    const previous = history.at(-1);
+    if (!previous) return;
+    setFuture((current) => [currentSnapshot(), ...current]);
+    setHistory((current) => current.slice(0, -1));
+    restoreSnapshot(previous);
+  }, [currentSnapshot, history, restoreSnapshot]);
+  const redo = useCallback(() => {
+    const next = future[0];
+    if (!next) return;
+    setHistory((current) => [...current.slice(-29), currentSnapshot()]);
+    setFuture((current) => current.slice(1));
+    restoreSnapshot(next);
+  }, [currentSnapshot, future, restoreSnapshot]);
+
+  useEffect(() => {
+    const keyboard = (event: KeyboardEvent) => {
+      const target = event.target;
+      const typing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+      if (typing) return;
+      const command = event.ctrlKey || event.metaKey;
+      if (command && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (command && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redo();
+        return;
+      }
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedId) {
+        event.preventDefault();
+        snapshot();
+        setItems((current) => removeItemWithDependents(current, selectedId));
+        setSelectedId(null);
+        return;
+      }
+      if (event.key === "Escape") {
+        setSelectedId(null);
+        setSelectedRoomEdge(null);
+        setDraftRoom([]);
+        setDrag(null);
+        setTool("select");
+      }
+    };
+    window.addEventListener("keydown", keyboard);
+    return () => window.removeEventListener("keydown", keyboard);
+  }, [redo, selectedId, snapshot, undo]);
 
   const roomPath = room.map((point) => `${point.x},${point.y}`).join(" ");
   const draftPath = draftRoom.map((point) => `${point.x},${point.y}`).join(" ");
   const roomCenter = polygonCenter(room);
   const patternX = bounds.minX + origin.x;
   const patternY = bounds.minY + origin.y;
-  const pitchX = actualTileW + grout;
-  const pitchY = actualTileH + grout;
-  const startX = patternX + Math.floor(((bounds.minX + bounds.maxX) / 2 - patternX) / pitchX) * pitchX;
-  const startY = patternY + Math.floor(((bounds.minY + bounds.maxY) / 2 - patternY) / pitchY) * pitchY;
-  const startLeftReference = Math.max(0, startX - bounds.minX);
-  const startRightReference = Math.max(0, bounds.maxX - startX);
-  const startTopReference = Math.max(0, startY - bounds.minY);
-  const startBottomReference = Math.max(0, bounds.maxY - startY);
+  const referenceCross = nearestGridIntersectionInsidePolygon(
+    room,
+    { x: patternX, y: patternY },
+    pitchX,
+    pitchY,
+    { x: patternX, y: patternY },
+  );
+  const startX = referenceCross.x;
+  const startY = referenceCross.y;
+  const horizontalReferenceSpan =
+    horizontalPolygonSpanAtY(room, startY, startX) ?? { min: bounds.minX, max: bounds.maxX };
+  const verticalReferenceSpan =
+    verticalPolygonSpanAtX(room, startX, startY) ?? { min: bounds.minY, max: bounds.maxY };
+  const startLeftReference = Math.max(0, startX - horizontalReferenceSpan.min);
+  const startRightReference = Math.max(0, horizontalReferenceSpan.max - startX);
+  const startTopReference = Math.max(0, startY - verticalReferenceSpan.min);
+  const startBottomReference = Math.max(0, verticalReferenceSpan.max - startY);
+  const setReferenceOffset = (axis: "x" | "y", value: number) => {
+    snapshot();
+    if (axis === "x") {
+      const target = clamp(
+        horizontalReferenceSpan.min + value,
+        horizontalReferenceSpan.min,
+        horizontalReferenceSpan.max,
+      );
+      setOrigin({
+        x: target - bounds.minX,
+        y: startY - bounds.minY,
+      });
+    } else {
+      const target = clamp(
+        verticalReferenceSpan.min + value,
+        verticalReferenceSpan.min,
+        verticalReferenceSpan.max,
+      );
+      setOrigin({
+        x: startX - bounds.minX,
+        y: target - bounds.minY,
+      });
+    }
+  };
   const guideWallOrientation = dimensionedWall
     ? Math.abs(dimensionedWall.end.x - dimensionedWall.start.x) < 1
       ? "vertical"
@@ -940,6 +1483,16 @@ export function LayoutPlanner() {
     y: (dimensionedWall.start.y + dimensionedWall.end.y) / 2,
   } : null;
   const guideHalfThickness = dimensionedWall ? dimensionedWall.thickness / 2 : 0;
+  const guideHorizontalSpan = guideWallMidpoint
+    ? horizontalPolygonSpanAtY(room, guideWallMidpoint.y, guideWallMidpoint.x)
+    : null;
+  const guideVerticalSpan = guideWallMidpoint
+    ? verticalPolygonSpanAtX(room, guideWallMidpoint.x, guideWallMidpoint.y)
+    : null;
+  const guideLeftBoundary = guideHorizontalSpan?.min ?? bounds.minX;
+  const guideRightBoundary = guideHorizontalSpan?.max ?? bounds.maxX;
+  const guideTopBoundary = guideVerticalSpan?.min ?? bounds.minY;
+  const guideBottomBoundary = guideVerticalSpan?.max ?? bounds.maxY;
   const guideLeftFace = guideWallMidpoint ? guideWallMidpoint.x - guideHalfThickness : 0;
   const guideRightFace = guideWallMidpoint ? guideWallMidpoint.x + guideHalfThickness : 0;
   const guideTopFace = guideWallMidpoint ? guideWallMidpoint.y - guideHalfThickness : 0;
@@ -949,31 +1502,73 @@ export function LayoutPlanner() {
     snapshot();
     const halfThickness = dimensionedWall.thickness / 2;
     if (side === "left" || side === "right") {
-      const rawTarget = side === "left" ? bounds.minX + value + halfThickness : bounds.maxX - value - halfThickness;
-      const target = clamp(rawTarget, bounds.minX + halfThickness, bounds.maxX - halfThickness);
+      const rawTarget = side === "left"
+        ? guideLeftBoundary + value + halfThickness
+        : guideRightBoundary - value - halfThickness;
+      const target = clamp(
+        rawTarget,
+        guideLeftBoundary + halfThickness,
+        guideRightBoundary - halfThickness,
+      );
       const delta = target - guideWallMidpoint.x;
-      setItems((current) => current.map((item) => item.id === dimensionedWall.id ? {
-        ...item,
-        start: { ...item.start, x: item.start.x + delta },
-        end: { ...item.end, x: item.end.x + delta },
-      } : item));
+      setItems((current) => {
+        const wall = current.find((item) => item.id === dimensionedWall.id);
+        if (!wall) return current;
+        const safeDelta = constrainWallTranslationToRoom(wall, delta, 0, room, bounds);
+        const updated = {
+          ...wall,
+          start: { ...wall.start, x: wall.start.x + safeDelta.dx, y: wall.start.y + safeDelta.dy },
+          end: { ...wall.end, x: wall.end.x + safeDelta.dx, y: wall.end.y + safeDelta.dy },
+        };
+        return reflowWallHostedOpenings(current, wall.id, updated);
+      });
     } else {
-      const rawTarget = side === "top" ? bounds.minY + value + halfThickness : bounds.maxY - value - halfThickness;
-      const target = clamp(rawTarget, bounds.minY + halfThickness, bounds.maxY - halfThickness);
+      const rawTarget = side === "top"
+        ? guideTopBoundary + value + halfThickness
+        : guideBottomBoundary - value - halfThickness;
+      const target = clamp(
+        rawTarget,
+        guideTopBoundary + halfThickness,
+        guideBottomBoundary - halfThickness,
+      );
       const delta = target - guideWallMidpoint.y;
-      setItems((current) => current.map((item) => item.id === dimensionedWall.id ? {
-        ...item,
-        start: { ...item.start, y: item.start.y + delta },
-        end: { ...item.end, y: item.end.y + delta },
-      } : item));
+      setItems((current) => {
+        const wall = current.find((item) => item.id === dimensionedWall.id);
+        if (!wall) return current;
+        const safeDelta = constrainWallTranslationToRoom(wall, 0, delta, room, bounds);
+        const updated = {
+          ...wall,
+          start: { ...wall.start, x: wall.start.x + safeDelta.dx, y: wall.start.y + safeDelta.dy },
+          end: { ...wall.end, x: wall.end.x + safeDelta.dx, y: wall.end.y + safeDelta.dy },
+        };
+        return reflowWallHostedOpenings(current, wall.id, updated);
+      });
     }
   };
+  const draftWallMidpoint =
+    drag?.kind === "draw" && tool === "wall"
+      ? {
+          x: (drag.start.x + drag.current.x) / 2,
+          y: (drag.start.y + drag.current.y) / 2,
+        }
+      : null;
+  const draftHorizontalSpan = draftWallMidpoint
+    ? horizontalPolygonSpanAtY(room, draftWallMidpoint.y, draftWallMidpoint.x)
+    : null;
+  const draftVerticalSpan = draftWallMidpoint
+    ? verticalPolygonSpanAtX(room, draftWallMidpoint.x, draftWallMidpoint.y)
+    : null;
+  const draftLeftBoundary = draftHorizontalSpan?.min ?? bounds.minX;
+  const draftRightBoundary = draftHorizontalSpan?.max ?? bounds.maxX;
+  const draftTopBoundary = draftVerticalSpan?.min ?? bounds.minY;
+  const draftBottomBoundary = draftVerticalSpan?.max ?? bounds.maxY;
   const tileFill = {
     transparent: "#d4b477",
     porcelain: "#ece9df",
     stone: "url(#stone-fill)",
     marble: "url(#marble-fill)",
     concrete: "url(#concrete-fill)",
+    wood: "url(#wood-fill)",
   }[tileAppearance];
   const tileOpacity = tileAppearance === "transparent" ? .2 : .88;
   const materialMin = materialUnit === "in" ? 1 : materialUnit === "mm" ? 25.4 : 2.54;
@@ -994,16 +1589,16 @@ export function LayoutPlanner() {
           <ChevronDown size={15} aria-hidden="true" />
         </label>
         <div className="header-actions">
-          <span className={`save-state ${saved && syncState === "saved" ? "is-saved" : ""} ${syncState}`}>
-            {syncState === "offline" || syncState === "failed" ? <CloudOff size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
-            {!saved ? "Saving" : { device: "Device saved", saving: "Syncing", saved: "Cloud saved", offline: "Offline · device saved", failed: "Sync failed · device saved", conflict: "Needs review" }[syncState]}
+          <span className={`save-state ${saved && syncState === "saved" && !deviceSaveFailed ? "is-saved" : ""} ${syncState} ${deviceSaveFailed ? "device-error" : ""}`}>
+            {deviceSaveFailed || syncState === "offline" || syncState === "failed" ? <CloudOff size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
+            {deviceSaveFailed ? "Device save failed" : !saved ? "Saving" : { device: "Device saved", saving: "Syncing", saved: "Cloud saved", offline: "Offline · device saved", failed: "Sync failed · device saved", conflict: "Needs review" }[syncState]}
           </span>
           <button className="icon-button" onClick={() => { saveCurrentLayout(); setLibraryOpen(true); }} aria-label="Saved layouts" title="Saved layouts"><FolderOpen size={18} /></button>
-          <button className="icon-button" onClick={()=>importInputRef.current?.click()} aria-label="Import shared project" title="Import shared project"><Upload size={18}/></button>
-          <button className="icon-button" onClick={exportShared} aria-label="Export shared project" title="Export shared project"><Download size={18}/></button>
-          <button className="icon-button" onClick={returnToBuildr} aria-label="Return result to Buildr" title="Return result to Buildr"><ExternalLink size={18}/></button>
+          <button className="icon-button desktop-action" onClick={()=>importInputRef.current?.click()} aria-label="Import shared project" title="Import shared project"><Upload size={18}/></button>
+          <button className="icon-button desktop-action" onClick={exportShared} aria-label="Export shared project" title="Export shared project"><Download size={18}/></button>
+          <button className="icon-button desktop-action" onClick={returnToBuildr} aria-label="Return result to Buildr" title="Return result to Buildr"><ExternalLink size={18}/></button>
           <SuiteAccountButton />
-          <button className="icon-button" onClick={printLayout} aria-label="Print layout" title="Print layout"><Printer size={18} /></button>
+          <button className="icon-button desktop-action" onClick={printLayout} aria-label="Print layout" title="Print layout"><Printer size={18} /></button>
           <button className="icon-button" onClick={undo} disabled={!history.length} aria-label="Undo"><Undo2 size={18} /></button>
           <button className="icon-button" onClick={redo} disabled={!future.length} aria-label="Redo"><Redo2 size={18} /></button>
         </div>
@@ -1028,14 +1623,23 @@ export function LayoutPlanner() {
             <span><span className="eyebrow">Saved work</span><strong id="layout-library-title">Layouts</strong></span>
             <button className="library-close" onClick={() => setLibraryOpen(false)} aria-label="Close saved layouts"><X size={19} /></button>
           </div>
-          <label className="library-name-field"><span>Current layout name</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
+          <div className="library-meta-fields">
+            <label className="library-name-field"><span>Layout / project name</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
+            <label className="library-name-field"><span>Room / area</span><input value={roomName} onChange={(event) => setRoomName(event.target.value)} /></label>
+          </div>
           <button className="primary new-layout-button" onClick={createNewLayout}><Plus size={17} /> New layout</button>
+          <div className="library-utility-actions" aria-label="Layout actions">
+            <button onClick={() => importInputRef.current?.click()}><Upload size={16} /> Import</button>
+            <button onClick={exportShared}><Download size={16} /> Export</button>
+            <button onClick={printLayout}><Printer size={16} /> Print / PDF</button>
+            <button onClick={returnToBuildr}><ExternalLink size={16} /> Buildr</button>
+          </div>
           <div className="layout-list">
             {[...savedLayouts].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt - a.updatedAt).map((layout) => <article className={`layout-card ${layout.id === activeLayoutId ? "active" : ""} ${layout.archivedAt ? "archived" : ""}`} key={layout.id}>
               <button className="layout-open" onClick={() => openSavedLayout(layout.id)}>
                 <strong>{layout.projectName}</strong>
-                <span>{formatLength(roomBounds(layout.room).maxX - roomBounds(layout.room).minX)} × {formatLength(roomBounds(layout.room).maxY - roomBounds(layout.room).minY)}</span>
-                <small>{layout.archivedAt ? "Archived · " : layout.id === activeLayoutId ? "Currently editing · " : ""}Saved {new Date(layout.updatedAt).toLocaleString()}</small>
+                <span>{layout.roomName || "Room"} · {formatLength(roomBounds(layout.room).maxX - roomBounds(layout.room).minX)} × {formatLength(roomBounds(layout.room).maxY - roomBounds(layout.room).minY)}</span>
+                <small>{layout.archivedAt ? "Archived · " : layout.id === activeLayoutId ? "Currently editing · " : ""}{layout.suiteContext?.buildrProjectId ? "Buildr linked · " : ""}Saved {new Date(layout.updatedAt).toLocaleString()}</small>
               </button>
               <div className="layout-card-actions">
                 <button onClick={() => duplicateSavedLayout(layout.id)} aria-label={`Duplicate ${layout.projectName}`}><Copy size={16} /></button>
@@ -1051,7 +1655,7 @@ export function LayoutPlanner() {
       <section className={readOnly?"workspace workspace-readonly":"workspace"}>
         <nav className="toolrail" aria-label="Drawing tools">
           {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"] ] as const).map(([value, Icon, label]) => (
-            <button key={value} className={tool === value ? "active" : ""} onClick={() => { setTool(value); setDraftRoom([]); setSelectedId(null); }} aria-pressed={tool === value}>
+            <button key={value} className={tool === value ? "active" : ""} onClick={() => { setTool(value); setDraftRoom([]); setSelectedId(null); setSelectedRoomEdge(null); }} aria-pressed={tool === value}>
               <Icon size={21} /><span>{label}</span>
             </button>
           ))}
@@ -1059,25 +1663,35 @@ export function LayoutPlanner() {
 
         <section className="canvas-column">
           <header className="print-only print-header">
-            <div><span>LAYOUT</span><strong>{projectName}</strong></div>
+            <div><span>LAYOUT</span><strong>{projectName}</strong><small>{roomName}</small></div>
             <dl>
               <div><dt>Room</dt><dd>{formatLength(roomWidth)} × {formatLength(roomHeight)}</dd></div>
-              <div><dt>Tile</dt><dd>{formatLength(tileWidth)} × {formatLength(tileHeight)}</dd></div>
-              <div><dt>Grout</dt><dd>{formatLength(grout)}</dd></div>
+              <div><dt>Material</dt><dd>{materialType === "tile" ? "Tile" : "Plank"} · {formatLength(tileWidth)} × {formatLength(tileHeight)}</dd></div>
+              <div><dt>{materialType === "tile" ? "Grout" : "Piece gap"}</dt><dd>{formatLength(grout)}</dd></div>
+              <div><dt>Pattern</dt><dd>{{ straight: "Straight", "half-offset": "1/2 offset", "third-offset": "1/3 offset" }[pattern]} · {rotation}°</dd></div>
               <div><dt>Floor area</dt><dd>{areaSqFt.toFixed(1)} ft²</dd></div>
+              <div><dt>Smallest cut</dt><dd>{formatLength(minimumCut)}{hasAngledBoundary ? " · angled boundaries included" : ""}</dd></div>
             </dl>
           </header>
           <div className="canvas-toolbar">
             <div className="mode-copy">
-              <strong>{{ select: "Select and adjust", pan: "Move around the plan", floor: "Move the tile field", wall: "Draw a straight wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
-              <span>{{ select: "Drag a selected wall to move it, or drag either end to resize it.", pan: "Drag the work area after zooming in.", floor: "Grab the floor and drag the entire tile layout in any direction.", wall: "Walls snap straight. Hold Alt only when you need an angle.", opening: "Openings snap straight along the wall.", room: "Tap each corner, then finish the room." }[tool]}</span>
+              <strong>{{ select: "Select and adjust", pan: "Move around the plan", floor: "Move the material field", wall: "Draw a straight wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
+              <span>{{ select: "Tap a dimension, wall, or opening to edit it exactly.", pan: "Drag the work area after zooming in.", floor: "Drag the reference cross and material grid together.", wall: "Snap helps with endpoints and common 45° angles. Hold Alt on desktop to bypass Snap.", opening: "Snap helps align openings to endpoints and common angles.", room: "Tap each corner. Snap helps keep common angles and closes to the first point." }[tool]}</span>
             </div>
             {tool === "room" && <div className="draft-actions"><button className="text-button" onClick={cancelRoom}>Cancel</button><button className="primary small" disabled={draftRoom.length < 3} onClick={finishRoom}>Finish room</button></div>}
+            <button
+              className={`snap-toggle ${snapEnabled ? "active" : ""}`}
+              onClick={() => { snapshot(); setSnapEnabled((value) => !value); }}
+              aria-pressed={snapEnabled}
+              title="Snap to endpoints and common 45° angles"
+            >
+              <Grid3X3 size={16} /> Snap {snapEnabled ? "On" : "Off"}
+            </button>
             <div className="zoom-controls">
               <button onClick={() => changeZoom(zoom - 0.2)} aria-label="Zoom out"><ZoomOut size={17} /></button>
               <span>{Math.round(zoom * 100)}%</span>
               <button onClick={() => changeZoom(zoom + 0.2)} aria-label="Zoom in"><ZoomIn size={17} /></button>
-              <button className="fit-button" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} aria-label="Fit plan">Fit</button>
+              <button className="fit-button" onClick={fitRoom} aria-label="Fit room in view">Fit</button>
             </div>
           </div>
 
@@ -1086,8 +1700,8 @@ export function LayoutPlanner() {
               onPointerDownCapture={beginPointerTracking} onPointerMoveCapture={movePointerTracking}
               onPointerUpCapture={endPointerTracking} onPointerCancelCapture={endPointerTracking}
               onPointerDown={startDrawing} onPointerMove={movePointer} onPointerUp={endPointer} onPointerCancel={endPointer}
-              onWheel={(event) => { event.preventDefault(); changeZoom(zoom * (event.deltaY > 0 ? .9 : 1.1)); }}
-              role="img" aria-label="Editable floor plan and tile layout">
+              onWheel={(event) => { event.preventDefault(); changeZoom(zoom * (event.deltaY > 0 ? .9 : 1.1), { x: event.clientX, y: event.clientY }); }}
+              role="application" aria-label="Interactive floor plan and material layout">
               <defs>
                 <pattern id="minor-grid" width="3" height="3" patternUnits="userSpaceOnUse"><path d="M 3 0 L 0 0 0 3" fill="none" stroke="#d9dfdb" strokeWidth=".25" /></pattern>
                 <pattern id="major-grid" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="12" height="12" fill="url(#minor-grid)" /><path d="M 12 0 L 0 0 0 12" fill="none" stroke="#b9c4bd" strokeWidth=".45" /></pattern>
@@ -1101,8 +1715,19 @@ export function LayoutPlanner() {
                 <pattern id="concrete-fill" width="7" height="7" patternUnits="userSpaceOnUse">
                   <rect width="7" height="7" fill="#c9cbc8" /><circle cx="1" cy="1.5" r=".25" fill="#999d99" /><circle cx="5.4" cy="3.5" r=".3" fill="#acafab" /><circle cx="2.8" cy="6" r=".2" fill="#8f948f" />
                 </pattern>
-                <pattern id="tile-pattern" x={patternX} y={patternY} width={actualTileW + grout} height={actualTileH + grout} patternUnits="userSpaceOnUse">
-                  <rect width={actualTileW} height={actualTileH} rx=".45" fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
+                <pattern id="wood-fill" width="12" height="7" patternUnits="userSpaceOnUse">
+                  <rect width="12" height="7" fill="#c8a978" /><path d="M0 2C3 1 6 3 12 1.8M0 5.5C4 4.2 7 6.5 12 5" fill="none" stroke="#9f7f55" strokeWidth=".35" opacity=".75" />
+                </pattern>
+                <pattern id="tile-pattern" x={patternX} y={patternY} width={pitchX} height={pitchY * patternRows} patternUnits="userSpaceOnUse">
+                  {Array.from({ length: patternRows }, (_, row) => {
+                    const shift = row * pitchX / patternRows;
+                    return (
+                      <g key={row}>
+                        <rect x={shift - pitchX} y={row * pitchY} width={actualTileW} height={actualTileH} rx=".45" fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
+                        <rect x={shift} y={row * pitchY} width={actualTileW} height={actualTileH} rx=".45" fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
+                      </g>
+                    );
+                  })}
                 </pattern>
                 <clipPath id="room-clip"><polygon points={roomPath} /></clipPath>
               </defs>
@@ -1111,138 +1736,237 @@ export function LayoutPlanner() {
               {showTile && <rect x={bounds.minX - actualTileW} y={bounds.minY - actualTileH} width={roomWidth + actualTileW * 2} height={roomHeight + actualTileH * 2} fill="url(#tile-pattern)" clipPath="url(#room-clip)" />}
               {items.map((item) => { const isSelected = selectedId === item.id; return (
                 <g key={item.id} className={`plan-item ${item.type} ${isSelected ? "selected" : ""}`} onPointerDown={(event) => beginItemDrag(event, item)}>
+                  <line className="item-hit" x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} strokeWidth={Math.max(10, item.thickness + 5)} />
                   <line x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} strokeWidth={item.type === "wall" ? item.thickness : Math.max(2.25, item.thickness * .55)} />
                   {item.type === "opening" && <line className="opening-center" x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} />}
                   <text x={(item.start.x + item.end.x) / 2} y={(item.start.y + item.end.y) / 2 - item.thickness / 2 - 2}>{formatLength(distance(item.start, item.end))}</text>
-                  {isSelected && <><circle cx={item.start.x} cy={item.start.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "start")} /><circle cx={item.end.x} cy={item.end.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "end")} /></>}
+                  {isSelected && <><circle className="endpoint-handle" cx={item.start.x} cy={item.start.y} r="4" onPointerDown={(event) => beginEndpointDrag(event, item.id, "start")} /><circle className="endpoint-handle" cx={item.end.x} cy={item.end.y} r="4" onPointerDown={(event) => beginEndpointDrag(event, item.id, "end")} /></>}
                 </g>
               ); })}
               {showTile && <g className="chalk-guide" clipPath="url(#room-clip)" pointerEvents="none">
-                <line className="chalk-axis" x1={startX} y1={bounds.minY} x2={startX} y2={bounds.maxY} />
-                <line className="chalk-axis" x1={bounds.minX} y1={startY} x2={bounds.maxX} y2={startY} />
+                <line className="chalk-axis" x1={startX} y1={verticalReferenceSpan.min} x2={startX} y2={verticalReferenceSpan.max} />
+                <line className="chalk-axis" x1={horizontalReferenceSpan.min} y1={startY} x2={horizontalReferenceSpan.max} y2={startY} />
                 <circle cx={startX} cy={startY} r="1.8" />
                 <g className="chalk-measure">
-                  <rect x={(bounds.minX + startX) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={(bounds.minX + startX) / 2} y={startY + 1.25}>{formatLength(startLeftReference)} from left</text>
+                  <rect x={(horizontalReferenceSpan.min + startX) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={(horizontalReferenceSpan.min + startX) / 2} y={startY + 1.25}>{formatLength(startLeftReference)} from left</text>
                 </g>
                 <g className="chalk-measure">
-                  <rect x={(startX + bounds.maxX) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={(startX + bounds.maxX) / 2} y={startY + 1.25}>{formatLength(startRightReference)} from right</text>
+                  <rect x={(startX + horizontalReferenceSpan.max) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={(startX + horizontalReferenceSpan.max) / 2} y={startY + 1.25}>{formatLength(startRightReference)} from right</text>
                 </g>
                 <g className="chalk-measure">
-                  <rect x={startX - 15} y={(bounds.minY + startY) / 2 - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={startX} y={(bounds.minY + startY) / 2 + 1.25}>{formatLength(startTopReference)} from top</text>
+                  <rect x={startX - 15} y={(verticalReferenceSpan.min + startY) / 2 - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={startX} y={(verticalReferenceSpan.min + startY) / 2 + 1.25}>{formatLength(startTopReference)} from top</text>
                 </g>
                 <g className="chalk-measure">
-                  <rect x={startX - 15} y={(startY + bounds.maxY) / 2 - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={startX} y={(startY + bounds.maxY) / 2 + 1.25}>{formatLength(startBottomReference)} from bottom</text>
+                  <rect x={startX - 15} y={(startY + verticalReferenceSpan.max) / 2 - 3.4} width="30" height="6.8" rx="2" />
+                  <text x={startX} y={(startY + verticalReferenceSpan.max) / 2 + 1.25}>{formatLength(startBottomReference)} from bottom</text>
                 </g>
-                <g className="chalk-label" transform={`translate(${startX + 12} ${startY - 7})`}><rect x="-10" y="-3" width="20" height="6" rx="2" /><text y="1">CHALK CROSSING</text></g>
+                <g className="chalk-label" transform={`translate(${startX + 12} ${startY - 7})`}><rect x="-11" y="-3" width="22" height="6" rx="2" /><text y="1">REFERENCE CROSS</text></g>
               </g>}
-              <g className="dimensions" pointerEvents="none">
-                {room.map((point, index) => { const next = room[(index + 1) % room.length]; const midpoint = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }; const labelPoint = outsideDimensionPoint(point, next, roomCenter); return (
-                  <g key={`${point.x}-${point.y}-${index}`}><line x1={midpoint.x} y1={midpoint.y} x2={labelPoint.x} y2={labelPoint.y} /><rect x={labelPoint.x - 9} y={labelPoint.y - 3.4} width="18" height="6.8" rx="2" /><text x={labelPoint.x} y={labelPoint.y + 1.45}>{formatLength(distance(point, next))}</text></g>
+              <g className="dimensions">
+                {room.map((point, index) => { const next = room[(index + 1) % room.length]; const midpoint = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }; const labelPoint = outsideDimensionPoint(point, next, roomCenter); const edgeSelected = selectedRoomEdge === index; return (
+                  <g
+                    key={`${point.x}-${point.y}-${index}`}
+                    className={edgeSelected ? "dimension-edge selected" : "dimension-edge"}
+                    role="button"
+                    tabIndex={tool === "select" ? 0 : -1}
+                    aria-label={`Edit room edge ${index + 1}, ${formatLength(distance(point, next))}`}
+                    onPointerDown={(event) => {
+                      if (tool !== "select") return;
+                      event.stopPropagation();
+                      setSelectedId(null);
+                      setSelectedRoomEdge(index);
+                    }}
+                    onKeyDown={(event) => {
+                      if (tool === "select" && (event.key === "Enter" || event.key === " ")) {
+                        event.preventDefault();
+                        setSelectedId(null);
+                        setSelectedRoomEdge(index);
+                      }
+                    }}
+                  >
+                    <line x1={midpoint.x} y1={midpoint.y} x2={labelPoint.x} y2={labelPoint.y} />
+                    <rect className="dimension-hit" x={labelPoint.x - 13} y={labelPoint.y - 5.2} width="26" height="10.4" rx="3" />
+                    <rect x={labelPoint.x - 9} y={labelPoint.y - 3.4} width="18" height="6.8" rx="2" />
+                    <text x={labelPoint.x} y={labelPoint.y + 1.45}>{formatLength(distance(point, next))}</text>
+                  </g>
                 ); })}
               </g>
               {dimensionedWall && guideWallMidpoint && guideWallOrientation === "vertical" && <g className="wall-offset-guides">
-                <line x1={bounds.minX} y1={guideWallMidpoint.y} x2={guideLeftFace} y2={guideWallMidpoint.y} />
-                <line x1={guideRightFace} y1={guideWallMidpoint.y} x2={bounds.maxX} y2={guideWallMidpoint.y} />
-                <WallOffsetLabel x={(bounds.minX + guideLeftFace) / 2} y={guideWallMidpoint.y} inches={guideLeftFace - bounds.minX} side="left" />
-                <WallOffsetLabel x={(guideRightFace + bounds.maxX) / 2} y={guideWallMidpoint.y} inches={bounds.maxX - guideRightFace} side="right" />
+                <line x1={guideLeftBoundary} y1={guideWallMidpoint.y} x2={guideLeftFace} y2={guideWallMidpoint.y} />
+                <line x1={guideRightFace} y1={guideWallMidpoint.y} x2={guideRightBoundary} y2={guideWallMidpoint.y} />
+                <WallOffsetLabel x={(guideLeftBoundary + guideLeftFace) / 2} y={guideWallMidpoint.y} inches={guideLeftFace - guideLeftBoundary} side="left" />
+                <WallOffsetLabel x={(guideRightFace + guideRightBoundary) / 2} y={guideWallMidpoint.y} inches={guideRightBoundary - guideRightFace} side="right" />
               </g>}
               {dimensionedWall && guideWallMidpoint && guideWallOrientation === "horizontal" && <g className="wall-offset-guides">
-                <line x1={guideWallMidpoint.x} y1={bounds.minY} x2={guideWallMidpoint.x} y2={guideTopFace} />
-                <line x1={guideWallMidpoint.x} y1={guideBottomFace} x2={guideWallMidpoint.x} y2={bounds.maxY} />
-                <WallOffsetLabel x={guideWallMidpoint.x} y={(bounds.minY + guideTopFace) / 2} inches={guideTopFace - bounds.minY} side="top" />
-                <WallOffsetLabel x={guideWallMidpoint.x} y={(guideBottomFace + bounds.maxY) / 2} inches={bounds.maxY - guideBottomFace} side="bottom" />
+                <line x1={guideWallMidpoint.x} y1={guideTopBoundary} x2={guideWallMidpoint.x} y2={guideTopFace} />
+                <line x1={guideWallMidpoint.x} y1={guideBottomFace} x2={guideWallMidpoint.x} y2={guideBottomBoundary} />
+                <WallOffsetLabel x={guideWallMidpoint.x} y={(guideTopBoundary + guideTopFace) / 2} inches={guideTopFace - guideTopBoundary} side="top" />
+                <WallOffsetLabel x={guideWallMidpoint.x} y={(guideBottomFace + guideBottomBoundary) / 2} inches={guideBottomBoundary - guideBottomFace} side="bottom" />
               </g>}
               {drag?.kind === "draw" && <g className="draft-line" pointerEvents="none"><line x1={drag.start.x} y1={drag.start.y} x2={drag.current.x} y2={drag.current.y} strokeWidth={tool === "wall" ? wallThickness : 2.5} /><text x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + drag.current.y) / 2 - 4}>{formatLength(distance(drag.start, drag.current))}</text></g>}
               {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.x - drag.start.x) < 1 && <g className="draft-offset-guides" pointerEvents="none">
-                <line x1={bounds.minX} y1={(drag.start.y + drag.current.y) / 2} x2={drag.start.x - wallThickness / 2} y2={(drag.start.y + drag.current.y) / 2} />
-                <line x1={drag.start.x + wallThickness / 2} y1={(drag.start.y + drag.current.y) / 2} x2={bounds.maxX} y2={(drag.start.y + drag.current.y) / 2} />
-                <WallOffsetLabel x={(bounds.minX + drag.start.x - wallThickness / 2) / 2} y={(drag.start.y + drag.current.y) / 2} inches={drag.start.x - wallThickness / 2 - bounds.minX} side="left" />
-                <WallOffsetLabel x={(drag.start.x + wallThickness / 2 + bounds.maxX) / 2} y={(drag.start.y + drag.current.y) / 2} inches={bounds.maxX - drag.start.x - wallThickness / 2} side="right" />
+                <line x1={draftLeftBoundary} y1={(drag.start.y + drag.current.y) / 2} x2={(drag.start.x + drag.current.x) / 2 - wallThickness / 2} y2={(drag.start.y + drag.current.y) / 2} />
+                <line x1={(drag.start.x + drag.current.x) / 2 + wallThickness / 2} y1={(drag.start.y + drag.current.y) / 2} x2={draftRightBoundary} y2={(drag.start.y + drag.current.y) / 2} />
+                <WallOffsetLabel x={(draftLeftBoundary + (drag.start.x + drag.current.x) / 2 - wallThickness / 2) / 2} y={(drag.start.y + drag.current.y) / 2} inches={(drag.start.x + drag.current.x) / 2 - wallThickness / 2 - draftLeftBoundary} side="left" />
+                <WallOffsetLabel x={((drag.start.x + drag.current.x) / 2 + wallThickness / 2 + draftRightBoundary) / 2} y={(drag.start.y + drag.current.y) / 2} inches={draftRightBoundary - (drag.start.x + drag.current.x) / 2 - wallThickness / 2} side="right" />
               </g>}
               {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.y - drag.start.y) < 1 && <g className="draft-offset-guides" pointerEvents="none">
-                <line x1={(drag.start.x + drag.current.x) / 2} y1={bounds.minY} x2={(drag.start.x + drag.current.x) / 2} y2={drag.start.y - wallThickness / 2} />
-                <line x1={(drag.start.x + drag.current.x) / 2} y1={drag.start.y + wallThickness / 2} x2={(drag.start.x + drag.current.x) / 2} y2={bounds.maxY} />
-                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={(bounds.minY + drag.start.y - wallThickness / 2) / 2} inches={drag.start.y - wallThickness / 2 - bounds.minY} side="top" />
-                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + wallThickness / 2 + bounds.maxY) / 2} inches={bounds.maxY - drag.start.y - wallThickness / 2} side="bottom" />
+                <line x1={(drag.start.x + drag.current.x) / 2} y1={draftTopBoundary} x2={(drag.start.x + drag.current.x) / 2} y2={(drag.start.y + drag.current.y) / 2 - wallThickness / 2} />
+                <line x1={(drag.start.x + drag.current.x) / 2} y1={(drag.start.y + drag.current.y) / 2 + wallThickness / 2} x2={(drag.start.x + drag.current.x) / 2} y2={draftBottomBoundary} />
+                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={(draftTopBoundary + (drag.start.y + drag.current.y) / 2 - wallThickness / 2) / 2} inches={(drag.start.y + drag.current.y) / 2 - wallThickness / 2 - draftTopBoundary} side="top" />
+                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={((drag.start.y + drag.current.y) / 2 + wallThickness / 2 + draftBottomBoundary) / 2} inches={draftBottomBoundary - (drag.start.y + drag.current.y) / 2 - wallThickness / 2} side="bottom" />
               </g>}
               {draftRoom.length > 0 && <g className="draft-room" pointerEvents="none"><polyline points={draftPath} />{draftRoom.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="2" />)}</g>}
             </svg>
             <div className="scale-note">Each small square = 3 inches · Pinch to zoom</div>
           </div>
           <section className="print-only print-summary">
-            <div><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left / {formatLength(startRightReference)} from right</strong></div>
-            <div><span>Horizontal chalk line</span><strong>{formatLength(startTopReference)} from top / {formatLength(startBottomReference)} from bottom</strong></div>
-            <div><span>Material estimate</span><strong>{tileCount} tiles including {wastePercent}% waste · {mortarBags} × 50 lb mortar bags</strong></div>
+            <div><span>Flooring area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div>
+            <div><span>Material area + {wastePercent}% waste</span><strong>{materialAreaSqFt.toFixed(1)} ft²</strong></div>
+            <div><span>Vertical reference</span><strong>{formatLength(startLeftReference)} from left / {formatLength(startRightReference)} from right</strong></div>
+            <div><span>Horizontal reference</span><strong>{formatLength(startTopReference)} from top / {formatLength(startBottomReference)} from bottom</strong></div>
+            <div><span>Material estimate</span><strong>{tileCount} pieces including {wastePercent}% waste{materialType === "tile" ? ` · ${mortarBags} × 50 lb mortar bags` : ""}</strong></div>
+            {notes.trim() && <div className="print-notes"><span>Install notes</span><strong>{notes.trim()}</strong></div>}
           </section>
         </section>
 
         <aside className="inspector">
           {selected ? <section className="panel selected-panel">
             <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? "Wall" : "Opening"}</strong></div>
-            <NumberField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} suffix="in" min={1} />
-            <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => setItems((current) => current.map((item) => item.id === selected.id ? constrainWallToBounds({ ...item, thickness: value }, bounds) : item))} suffix="in" min={1} step={.5} />
+            <div className="field-row">
+              <LengthField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} min={1} />
+              <NumberField label={selectedOpeningHosted ? "Angle (host)" : "Angle"} value={segmentAngleDegrees(selected.start, selected.end)} onChange={updateSelectedAngle} suffix="°" min={0} step={1} disabled={selectedOpeningHosted} />
+            </div>
+            <NumberField label={selected.type === "wall" ? "Thickness" : selectedOpeningHosted ? "Host wall thickness" : "Wall thickness"} value={selected.thickness} onChange={updateSelectedThickness} suffix="in" min={1} step={.5} disabled={selectedOpeningHosted} />
+            {selected.type === "opening" && <div className={`host-status ${selectedOpeningHosted ? "attached" : "free"}`}>
+              <strong>{selected.hostId ? "Attached to interior wall" : selected.hostEdgeIndex != null ? `Attached to room edge ${selected.hostEdgeIndex + 1}` : "Free opening"}</strong>
+              <span>{selectedOpeningHosted ? "Moving or resizing this opening keeps it on its wall." : "Move this opening near a wall and redraw it there if you want a hosted relationship."}</span>
+              {selectedOpeningHosted && <button className="text-button" onClick={detachSelectedOpening}>Detach from wall</button>}
+            </div>}
             {selected.type === "wall" && guideWallOrientation === "vertical" && <div className="field-row wall-offset-fields">
-              <OffsetField label="From left" inches={guideLeftFace - bounds.minX} onCommit={(value) => setWallOffset("left", value)} />
-              <OffsetField label="From right" inches={bounds.maxX - guideRightFace} onCommit={(value) => setWallOffset("right", value)} />
+              <OffsetField label="From left" inches={guideLeftFace - guideLeftBoundary} onCommit={(value) => setWallOffset("left", value)} />
+              <OffsetField label="From right" inches={guideRightBoundary - guideRightFace} onCommit={(value) => setWallOffset("right", value)} />
             </div>}
             {selected.type === "wall" && guideWallOrientation === "horizontal" && <div className="field-row wall-offset-fields">
-              <OffsetField label="From top" inches={guideTopFace - bounds.minY} onCommit={(value) => setWallOffset("top", value)} />
-              <OffsetField label="From bottom" inches={bounds.maxY - guideBottomFace} onCommit={(value) => setWallOffset("bottom", value)} />
+              <OffsetField label="From top" inches={guideTopFace - guideTopBoundary} onCommit={(value) => setWallOffset("top", value)} />
+              <OffsetField label="From bottom" inches={guideBottomBoundary - guideBottomFace} onCommit={(value) => setWallOffset("bottom", value)} />
             </div>}
             {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure from both room borders to the nearest wall face. Use the fields above to enter an exact offset. The guides are visible only while this wall is selected.</p>}
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
-            <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); setSelectedId(null); }}>Delete {selected.type}</button>
+            <button className="delete-button" onClick={() => {
+              snapshot();
+              setItems((current) => removeItemWithDependents(current, selected.id));
+              setSelectedId(null);
+            }}>Delete {selected.type}{selected.type === "wall" && items.some((item) => item.hostId === selected.id) ? " + attached openings" : ""}</button>
+          </section> : selectedEdgeStart && selectedEdgeEnd && selectedRoomEdge != null ? <section className="panel selected-panel">
+            <div className="panel-heading"><span className="eyebrow">Selected dimension</span><strong>Room edge {selectedRoomEdge + 1}</strong></div>
+            <div className="field-row">
+              <LengthField label="Length" value={distance(selectedEdgeStart, selectedEdgeEnd)} onChange={updateRoomEdgeLength} min={1} />
+              <NumberField label="Angle" value={segmentAngleDegrees(selectedEdgeStart, selectedEdgeEnd)} onChange={updateRoomEdgeAngle} suffix="°" min={0} step={1} />
+            </div>
+            <p className="selection-hint">{isRectangle(room) ? "Changing this edge length resizes the rectangle while keeping opposite sides aligned. Changing the angle converts the room to a custom shape." : "Length moves the next corner along this wall direction. Angle rotates this wall around its first corner. Verify adjacent dimensions after changing a custom shape."}</p>
+            <button className="text-button room-edge-done" onClick={() => setSelectedRoomEdge(null)}>Done</button>
           </section> : <section className="panel">
             <div className="panel-heading"><span className="eyebrow">Room</span><strong>{isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom shape"}</strong></div>
-            {isRectangle(room) && <div className="field-row"><NumberField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} suffix="in" min={24} /><NumberField label="Length" value={roomHeight} onChange={(value) => resizeRectangle("height", value)} suffix="in" min={24} /></div>}
-            <NumberField label="New wall thickness" value={wallThickness} onChange={setWallThickness} suffix="in" min={1} step={.5} />
+            {isRectangle(room) && <div className="field-row"><LengthField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} min={24} /><LengthField label="Length" value={roomHeight} onChange={(value) => resizeRectangle("height", value)} min={24} /></div>}
+            <NumberField label="New wall thickness" value={wallThickness} onChange={(value) => { snapshot(); setWallThickness(value); }} suffix="in" min={1} step={.5} />
           </section>}
 
+          <section className="panel room-summary-panel">
+            <div className="panel-heading"><span className="eyebrow">Room summary</span><strong>{roomName.trim() || "Room"}</strong></div>
+            <div className="metrics">
+              <div><span>Flooring area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div>
+              <div><span>Material + {wastePercent}%</span><strong>{materialAreaSqFt.toFixed(1)} ft²</strong></div>
+              <div><span>Shape</span><strong>{isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom"}</strong></div>
+            </div>
+          </section>
+
           <section className="panel tile-panel">
-            <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>Tile layout</strong></span><label className="switch"><input aria-label="Show tile layout" type="checkbox" checked={showTile} onChange={(event) => setShowTile(event.target.checked)} /><span aria-hidden="true" /></label></div>
-            <div className="material-units" aria-label="Tile measurement unit">
-              {(["in", "mm", "cm"] as MaterialUnit[]).map((unit) => <button key={unit} className={materialUnit === unit ? "active" : ""} onClick={() => setMaterialUnit(unit)} aria-pressed={materialUnit === unit}>{unit}</button>)}
+            <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>{materialType === "tile" ? "Tile layout" : "Plank layout"}</strong></span><label className="switch"><input aria-label="Show material layout" type="checkbox" checked={showTile} onChange={(event) => { snapshot(); setShowTile(event.target.checked); }} /><span aria-hidden="true" /></label></div>
+            <div className="material-kind" aria-label="Material type">
+              {([["tile", "Tile"], ["plank", "Plank"]] as [MaterialType, string][]).map(([value, label]) => (
+                <button key={value} className={materialType === value ? "active" : ""} onClick={() => { snapshot(); setMaterialType(value); }} aria-pressed={materialType === value}>{label}</button>
+              ))}
+            </div>
+            <div className="material-units" aria-label="Material measurement unit">
+              {(["in", "mm", "cm"] as MaterialUnit[]).map((unit) => <button key={unit} className={materialUnit === unit ? "active" : ""} onClick={() => { snapshot(); setMaterialUnit(unit); }} aria-pressed={materialUnit === unit}>{unit}</button>)}
             </div>
             <div className="field-row">
-              <NumberField label="Tile width" value={displayUnit(tileWidth, materialUnit)} onChange={(value) => setTileWidth(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={materialMin} step={materialStep} />
-              <NumberField label="Tile length" value={displayUnit(tileHeight, materialUnit)} onChange={(value) => setTileHeight(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={materialMin} step={materialStep} />
+              <NumberField label="Material width" value={displayUnit(tileWidth, materialUnit)} onChange={(value) => { snapshot(); setTileWidth(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={materialMin} step={materialStep} />
+              <NumberField label="Material length" value={displayUnit(tileHeight, materialUnit)} onChange={(value) => { snapshot(); setTileHeight(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={materialMin} step={materialStep} />
             </div>
-            <NumberField label="Grout joint" value={displayUnit(grout, materialUnit)} onChange={(value) => setGrout(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={groutMin} step={groutStep} />
-            <div className="appearance-field">
-              <span>Tile appearance</span>
-              <div className="appearance-options">
-                {([ ["transparent", "Clear"], ["porcelain", "Porcelain"], ["stone", "Stone"], ["marble", "Marble"], ["concrete", "Concrete"] ] as [TileAppearance, string][]).map(([value, label]) => (
-                  <button key={value} className={tileAppearance === value ? `active appearance-${value}` : `appearance-${value}`} onClick={() => setTileAppearance(value)} aria-pressed={tileAppearance === value}><span aria-hidden="true" />{label}</button>
+            <NumberField label={materialType === "tile" ? "Grout joint" : "Piece gap"} value={displayUnit(grout, materialUnit)} onChange={(value) => { snapshot(); setGrout(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={materialType === "tile" ? groutMin : 0} step={groutStep} />
+            <div className="pattern-field">
+              <span>Pattern</span>
+              <div className="pattern-options">
+                {([
+                  ["straight", "Straight"],
+                  ["half-offset", "1/2 offset"],
+                  ["third-offset", "1/3 offset"],
+                ] as [LayoutPattern, string][]).map(([value, label]) => (
+                  <button key={value} className={pattern === value ? "active" : ""} onClick={() => { snapshot(); setPattern(value); }} aria-pressed={pattern === value}>{label}</button>
                 ))}
               </div>
             </div>
-            <div className="button-row"><button className="secondary" onClick={() => setRotation((value) => value === 0 ? 90 : 0)}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Optimize cuts</button></div>
-            <button className={`grab-floor-button ${tool === "floor" ? "active" : ""}`} onClick={() => { setShowTile(true); setTool("floor"); setSelectedId(null); }}><Move size={16} /> {tool === "floor" ? "Drag the floor on the plan" : "Grab and move floor"}</button>
-            <div className="nudge-control"><span>Precision adjustment · 1/4″</span><div><button onClick={() => setOrigin((point) => ({ ...point, x: point.x - .25 }))} aria-label="Move layout left">←</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y - .25 }))} aria-label="Move layout up">↑</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y + .25 }))} aria-label="Move layout down">↓</button><button onClick={() => setOrigin((point) => ({ ...point, x: point.x + .25 }))} aria-label="Move layout right">→</button></div></div>
+            <div className="appearance-field">
+              <span>Display appearance</span>
+              <div className="appearance-options">
+                {(materialType === "tile"
+                  ? ([ ["transparent", "Clear"], ["porcelain", "Porcelain"], ["stone", "Stone"], ["marble", "Marble"], ["concrete", "Concrete"] ] as [TileAppearance, string][])
+                  : ([ ["transparent", "Clear"], ["wood", "Wood"] ] as [TileAppearance, string][])
+                ).map(([value, label]) => (
+                  <button key={value} className={tileAppearance === value ? `active appearance-${value}` : `appearance-${value}`} onClick={() => { snapshot(); setTileAppearance(value); }} aria-pressed={tileAppearance === value}><span aria-hidden="true" />{label}</button>
+                ))}
+              </div>
+            </div>
+            <div className="button-row"><button className="secondary" onClick={() => { snapshot(); setRotation((value) => value === 0 ? 90 : 0); }}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Optimize cuts</button></div>
+            <button className={`grab-floor-button ${tool === "floor" ? "active" : ""}`} onClick={() => { setShowTile(true); setTool("floor"); setSelectedId(null); setSelectedRoomEdge(null); }}><Move size={16} /> {tool === "floor" ? "Drag reference lines and material" : "Move reference lines / material"}</button>
+            <div className="nudge-control"><span>Precision adjustment · 1/8″</span><div><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, x: point.x - .125 })); }} aria-label="Move layout left">←</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, y: point.y - .125 })); }} aria-label="Move layout up">↑</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, y: point.y + .125 })); }} aria-label="Move layout down">↓</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, x: point.x + .125 })); }} aria-label="Move layout right">→</button></div></div>
           </section>
 
           <section className="panel results-panel">
-            <div className="panel-heading inline-heading"><span><span className="eyebrow">Layout check</span><strong>{cutWarning ? "Review edge cuts" : "Cuts look balanced"}</strong></span><span className={`result-icon ${cutWarning ? "warning" : ""}`}>{cutWarning ? "!" : <Check size={17} />}</span></div>
-            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest planned cut</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
-            <div className="start-reference-card"><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left · {formatLength(startRightReference)} from right</strong><span>Horizontal chalk line</span><strong>{formatLength(startTopReference)} from top · {formatLength(startBottomReference)} from bottom</strong></div>
-            <p>{cutWarning ? "A room edge, wall face, wall end, or opening may create a cut below half a tile. Use Optimize cuts, drag the floor, or nudge it precisely." : "The current tile position avoids small cuts across the room edges, walls, and openings being checked."}</p>
+            <div className="panel-heading inline-heading"><span><span className="eyebrow">Layout check</span><strong>{cutWarning ? "Review small cuts" : hasAngledBoundary ? "Angled cuts look balanced" : "Cuts look balanced"}</strong></span><span className={`result-icon ${layoutNeedsReview ? "warning" : ""}`}>{layoutNeedsReview ? "!" : <Check size={17} />}</span></div>
+            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Material + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest boundary cut</span><strong>{formatLength(minimumCut)}</strong></div></div>
+            <div className="start-reference-card">
+              <span>Exact reference position</span>
+              <div className="reference-fields">
+                <OffsetField label="Vertical from left" inches={startLeftReference} onCommit={(value) => setReferenceOffset("x", value)} />
+                <OffsetField label="Horizontal from top" inches={startTopReference} onCommit={(value) => setReferenceOffset("y", value)} />
+              </div>
+              <small>{formatLength(startRightReference)} from right · {formatLength(startBottomReference)} from bottom</small>
+            </div>
+            <p>{cutWarning ? "A room boundary, wall, or opening creates a small planned cut. Optimize cuts, drag the reference cross, or nudge it precisely." : hasAngledBoundary ? "Angled room boundaries are included in the cut-depth calculation and optimization. Verify final field conditions and substrate geometry before setting material." : "The current material position avoids small cuts across the room boundaries, walls, and openings being checked."}</p>
+            {optimizationMessage && <div className="optimization-feedback"><Sparkles size={15} /><span>{optimizationMessage}</span></div>}
+          </section>
+
+          <section className="panel notes-panel">
+            <div className="panel-heading"><span className="eyebrow">Install notes</span><strong>Field notes</strong></div>
+            <textarea
+              aria-label="Installation notes"
+              value={notes}
+              maxLength={1200}
+              placeholder="Center doorway, keep a full tile at vanity, verify cabinet location…"
+              onChange={(event) => setNotes(event.target.value)}
+            />
           </section>
 
           <section className="panel install-panel">
-            <div className="panel-heading"><span className="eyebrow">Install setup</span><strong>{mortar.trowel}</strong></div>
-            <div className="install-metrics"><div><span>Mortar estimate</span><strong>{mortarBags} × 50 lb bags</strong></div><div><span>Waste allowance</span><NumberField label="Waste allowance" value={wastePercent} onChange={setWastePercent} suffix="%" min={0} step={1} /></div></div>
-            <p>Planning estimate based on about {mortar.coverage} ft² per bag. Confirm the mortar manufacturer&apos;s coverage and the trowel required for the tile back, substrate flatness, and required mortar coverage; back-buttering can increase usage.</p>
+            <div className="panel-heading"><span className="eyebrow">Install setup</span><strong>{materialType === "tile" ? mortar.trowel : "Plank planning"}</strong></div>
+            <div className="install-metrics">
+              <div><span>{materialType === "tile" ? "Mortar estimate" : "Material takeoff"}</span><strong>{materialType === "tile" ? `${mortarBags} × 50 lb bags` : `${tileCount} pieces`}</strong></div>
+              <div><span>Waste allowance</span><NumberField label="Waste allowance" value={wastePercent} onChange={(value) => { snapshot(); setWastePercent(value); }} suffix="%" min={0} step={1} /></div>
+            </div>
+            <p>{materialType === "tile" ? `Planning estimate based on about ${mortar.coverage} ft² per bag. Confirm the mortar manufacturer’s coverage and the trowel required for the tile back, substrate flatness, and required mortar coverage; back-buttering can increase usage.` : "Piece count is a planning estimate from room area, plank size, and waste. Confirm the flooring manufacturer’s expansion gap, acclimation, staggering, and installation requirements before installation."}</p>
           </section>
         </aside>
       </section>
 
       <nav className="mobile-tools" aria-label="Drawing tools">
-        {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Tile"] ] as const).map(([value, Icon, label]) => (
-          <button key={value} className={value !== "tile" && tool === value ? "active" : ""} onClick={() => { if (value === "tile") document.querySelector(".tile-panel")?.scrollIntoView({ behavior: "smooth" }); else setTool(value); }}><Icon size={19} /><span>{label}</span></button>
+        {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Material"] ] as const).map(([value, Icon, label]) => (
+          <button key={value} className={value !== "tile" && tool === value ? "active" : ""} onClick={() => { if (value === "tile") document.querySelector(".tile-panel")?.scrollIntoView({ behavior: "smooth" }); else { setTool(value); setDraftRoom([]); setSelectedId(null); setSelectedRoomEdge(null); } }}><Icon size={19} /><span>{label}</span></button>
         ))}
       </nav>
     </main>

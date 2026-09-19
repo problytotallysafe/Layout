@@ -60,18 +60,23 @@ function writeLayout(layout: SavedLayout) {
 function signature(layout: SavedLayout) {
   const normalized = JSON.stringify({
     projectName: layout.projectName,
+    roomName: layout.roomName,
     room: layout.room,
     items: layout.items,
     tileWidth: layout.tileWidth,
     tileHeight: layout.tileHeight,
     grout: layout.grout,
     materialUnit: layout.materialUnit,
+    materialType: layout.materialType,
     tileAppearance: layout.tileAppearance,
+    pattern: layout.pattern,
     wastePercent: layout.wastePercent,
     wallThickness: layout.wallThickness,
     origin: layout.origin,
     rotation: layout.rotation,
     showTile: layout.showTile,
+    snapEnabled: layout.snapEnabled,
+    notes: layout.notes,
     archivedAt: layout.archivedAt,
   });
   let hash = 2166136261;
@@ -153,14 +158,14 @@ export function LayoutShell() {
 
   useEffect(() => {
     const initial = window.setTimeout(refresh, 0);
-    const timer = window.setInterval(refresh, 900);
     const authChanged = () => setPlannerKey((value) => value + 1);
     window.addEventListener("buildr:auth-change", authChanged);
+    window.addEventListener("buildr:layout-saved", refresh);
     window.addEventListener("storage", refresh);
     return () => {
       window.clearTimeout(initial);
-      window.clearInterval(timer);
       window.removeEventListener("buildr:auth-change", authChanged);
+      window.removeEventListener("buildr:layout-saved", refresh);
       window.removeEventListener("storage", refresh);
     };
   }, [refresh]);
@@ -223,26 +228,40 @@ export function LayoutShell() {
       if (savingReference.current) return false;
       savingReference.current = true;
       setSaving(true);
-      const result = await saveSuiteDrawingReference(
-        layout,
-        expectedOverride ?? mark.remoteRevision,
-      );
-      savingReference.current = false;
-      setSaving(false);
-      if (result.ok) {
-        writeMark(drawingId, {
-          remoteRevision: result.remoteRevision,
-          localSignature: currentSignature,
-        });
-        setConflict(null);
-        setMessage("Synced to Buildr");
-        return true;
+      try {
+        const result = await saveSuiteDrawingReference(
+          layout,
+          expectedOverride ?? mark.remoteRevision,
+        );
+        if (result.ok) {
+          writeMark(drawingId, {
+            remoteRevision: result.remoteRevision,
+            localSignature: currentSignature,
+          });
+          setConflict(null);
+          setMessage("Synced to Buildr");
+          return true;
+        }
+        if (result.conflict) {
+          setConflict({ ...result, drawingId, localLayout: layout });
+          setMessage(result.error);
+        } else {
+          setMessage(
+            result.authRequired
+              ? result.error
+              : "Couldn't sync this change. Your device copy is safe and Layout will retry when service is available.",
+          );
+        }
+        return false;
+      } catch {
+        setMessage(
+          "Couldn't sync this change. Your device copy is safe and Layout will retry when service is available.",
+        );
+        return false;
+      } finally {
+        savingReference.current = false;
+        setSaving(false);
       }
-      if (result.conflict) {
-        setConflict({ ...result, drawingId, localLayout: layout });
-      }
-      setMessage(result.error);
-      return false;
     },
     [],
   );
@@ -264,6 +283,7 @@ export function LayoutShell() {
   }, [syncNow]);
 
   const returnToBuildr = useCallback(async () => {
+    window.dispatchEvent(new Event("buildr:save-now"));
     const layout = activeLayout();
     if (!layout) return;
     const linked = layout.suiteContext as ExtendedContext | undefined;
@@ -310,7 +330,10 @@ export function LayoutShell() {
       );
       const layout = activeLayout();
       const linked = layout?.suiteContext as ExtendedContext | undefined;
-      if (!button || !linked?.suiteDrawingId) return;
+      const hasLinkedReturn = Boolean(
+        linked?.suiteDrawingId || linked?.buildrProjectId || linked?.sourceEnvelope,
+      );
+      if (!button || !hasLinkedReturn) return;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -385,10 +408,11 @@ export function LayoutShell() {
       <LayoutPlanner key={plannerKey} />
       {(message || hasBuildrReturn) && (
         <div
+          className="suite-return-bar"
           style={{
             position: "fixed",
             right: 12,
-            bottom: 12,
+            bottom: "var(--suite-return-bottom, 12px)",
             zIndex: 800,
             display: "flex",
             gap: 8,

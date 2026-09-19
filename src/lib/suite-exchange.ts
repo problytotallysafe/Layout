@@ -9,6 +9,7 @@ import {
   type SuiteRoom,
 } from "./suite-contract.ts";
 import type { DrawItem, Point, SavedLayout } from "../components/layout-planner";
+import { attachOpeningToNearestHost } from "./layout-hosting.ts";
 
 type SuiteContext = {
   organizationId: string | null;
@@ -23,11 +24,15 @@ type LayoutSettings = {
   tileWidthMm?: number;
   tileHeightMm?: number;
   groutMm?: number;
+  materialType?: SavedLayout["materialType"];
   appearance?: SavedLayout["tileAppearance"];
+  pattern?: SavedLayout["pattern"];
   wastePercent?: number;
   originMm?: { x: number; y: number };
   rotation?: number;
   showTile?: boolean;
+  snapEnabled?: boolean;
+  notes?: string;
 };
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -44,6 +49,14 @@ const inchPoint = (point: { x: number; y: number }) => ({
   x: mmToInches(point.x),
   y: mmToInches(point.y),
 });
+const polygonAreaSquareInches = (points: Point[]) =>
+  Math.abs(
+    points.reduce((sum, point, index) => {
+      const next = points[(index + 1) % points.length];
+      return sum + point.x * next.y - next.x * point.y;
+    }, 0),
+  ) / 2;
+const roundSquareFeet = (value: number) => Math.round(value * 100) / 100;
 const contextFor = (layout: SavedLayout) =>
   layout.suiteContext as SuiteContext | undefined;
 
@@ -79,6 +92,9 @@ function segmentFromObject(entity: SuiteEntity): DrawItem | null {
     start: { x: center.x - dx, y: center.y - dy },
     end: { x: center.x + dx, y: center.y + dy },
     thickness: mmToInches(Number(entity.geometry.depth || 114.3)),
+    hostId: typeof entity.geometry.wallId === "string" ? entity.geometry.wallId : undefined,
+    hostEdgeIndex: Number.isInteger(Number(entity.geometry.layoutHostEdgeIndex)) ? Number(entity.geometry.layoutHostEdgeIndex) : undefined,
+    hostT: Number.isFinite(Number(entity.geometry.layoutHostT)) ? Number(entity.geometry.layoutHostT) : undefined,
   };
 }
 
@@ -103,6 +119,9 @@ function itemFromEntity(entity: SuiteEntity): DrawItem | null {
     start: inchPoint({ x: Number(start.x), y: Number(start.y) }),
     end: inchPoint({ x: Number(end.x), y: Number(end.y) }),
     thickness: mmToInches(Number(entity.geometry.thickness || 114.3)),
+    hostId: typeof entity.geometry.hostId === "string" ? entity.geometry.hostId : undefined,
+    hostEdgeIndex: Number.isInteger(Number(entity.geometry.hostEdgeIndex)) ? Number(entity.geometry.hostEdgeIndex) : undefined,
+    hostT: Number.isFinite(Number(entity.geometry.hostT)) ? Number(entity.geometry.hostT) : undefined,
   };
 }
 
@@ -130,6 +149,9 @@ function entityForItem(item: DrawItem, prior?: SuiteEntity): SuiteEntity {
           ) *
             180) /
           Math.PI,
+        wallId: item.hostId ?? prior.geometry.wallId,
+        layoutHostEdgeIndex: item.hostEdgeIndex,
+        layoutHostT: item.hostT,
       },
     };
   }
@@ -144,6 +166,9 @@ function entityForItem(item: DrawItem, prior?: SuiteEntity): SuiteEntity {
       start: mmPoint(item.start),
       end: mmPoint(item.end),
       thickness: inchesToMm(item.thickness),
+      hostId: item.hostId ?? prior?.geometry.hostId,
+      hostEdgeIndex: item.hostEdgeIndex,
+      hostT: item.hostT,
     },
   } as SuiteEntity;
 }
@@ -169,9 +194,16 @@ export function layoutToSuite(
       (entity) => entity.kind !== "room.boundary" && !currentIds.has(entity.id),
     ) || [];
 
+  const flooringSquareFeet = roundSquareFeet(
+    polygonAreaSquareInches(layout.room) / 144,
+  );
+  const materialSquareFeetWithWaste = roundSquareFeet(
+    flooringSquareFeet * (1 + Math.max(0, layout.wastePercent) / 100),
+  );
+
   const room: SuiteRoom = {
     id: sourceRoom?.id || context?.sourceRoomId || `room_${layout.id}`,
-    name: sourceRoom?.name || layout.projectName,
+    name: layout.roomName || sourceRoom?.name || layout.projectName,
     displayUnit: sourceRoom?.displayUnit || "ft-in",
     origin: sourceRoom?.origin || { x: 0, y: 0 },
     entities: [
@@ -196,18 +228,36 @@ export function layoutToSuite(
     extensions: {
       ...(sourceRoom?.extensions || {}),
       condition: sourceRoom?.extensions?.condition || "proposed",
+      roomSummary: {
+        flooringSquareFeet,
+        materialSquareFeetWithWaste,
+        wastePercent: layout.wastePercent,
+        calculatedBy: "layout",
+      },
       layout: {
         tileWidthMm: inchesToMm(layout.tileWidth),
         tileHeightMm: inchesToMm(layout.tileHeight),
         groutMm: inchesToMm(layout.grout),
+        materialType: layout.materialType,
         appearance: layout.tileAppearance,
+        pattern: layout.pattern,
         wastePercent: layout.wastePercent,
+        floorAreaSqFt: flooringSquareFeet,
+        materialAreaSqFtWithWaste: materialSquareFeetWithWaste,
         originMm: mmPoint(layout.origin),
         rotation: layout.rotation,
         showTile: layout.showTile,
+        snapEnabled: layout.snapEnabled,
+        notes: layout.notes || undefined,
       },
     },
   };
+
+  const rooms = source
+    ? source.project.rooms.some((candidate) => candidate.id === room.id)
+      ? source.project.rooms.map((candidate) => candidate.id === room.id ? room : candidate)
+      : [...source.project.rooms, room]
+    : [room];
 
   const project: SuiteProject = {
     id: source?.project.id || layout.id,
@@ -221,7 +271,7 @@ export function layoutToSuite(
     createdAt:
       source?.project.createdAt || new Date(layout.updatedAt).toISOString(),
     modifiedAt: new Date(layout.updatedAt).toISOString(),
-    rooms: [room],
+    rooms,
     extensions: source?.project.extensions,
   };
   const envelope = createSuiteEnvelope(
@@ -262,10 +312,16 @@ export function suiteToLayout(input: unknown): {
         "No compatible room boundary was found. The original shared record was not changed.",
     };
 
-  const imported = room.entities.flatMap((entity) => {
+  const roomInches = vertices.map(inchPoint);
+  const rawImported = room.entities.flatMap((entity) => {
     const item = itemFromEntity(entity);
     return item ? [item] : [];
   });
+  const imported = rawImported.map((item) =>
+    item.type === "opening"
+      ? attachOpeningToNearestHost(item, rawImported, roomInches, 12)
+      : item,
+  );
   const settings = (record(room.extensions?.layout)
     ? room.extensions?.layout
     : {}) as LayoutSettings;
@@ -278,13 +334,16 @@ export function suiteToLayout(input: unknown): {
       revision: Math.max(1, Number(parsed.value.source.revision) || 1),
       updatedAt: now,
       projectName: parsed.value.project.name,
-      room: vertices.map(inchPoint),
+      roomName: room.name,
+      room: roomInches,
       items: imported,
       tileWidth: mmToInches(Number(settings.tileWidthMm || 304.8)),
       tileHeight: mmToInches(Number(settings.tileHeightMm || 609.6)),
       grout: mmToInches(Number(settings.groutMm || 3.175)),
       materialUnit: "in",
+      materialType: settings.materialType === "plank" ? "plank" : "tile",
       tileAppearance: settings.appearance || "transparent",
+      pattern: settings.pattern || "straight",
       wastePercent: Number(settings.wastePercent ?? 10),
       wallThickness: 4.5,
       origin:
@@ -293,6 +352,8 @@ export function suiteToLayout(input: unknown): {
           : { x: 0, y: 0 },
       rotation: settings.rotation === 90 ? 90 : 0,
       showTile: settings.showTile !== false,
+      snapEnabled: settings.snapEnabled !== false,
+      notes: typeof settings.notes === "string" ? settings.notes : "",
       suiteContext: {
         organizationId: parsed.value.project.organizationId,
         buildrProjectId: parsed.value.project.buildrProjectId || null,
