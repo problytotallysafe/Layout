@@ -434,6 +434,7 @@ export function LayoutPlanner() {
   const areaSqFt = polygonArea(room) / 144;
   const tileSqFt = (tileWidth * tileHeight) / 144;
   const wasteMultiplier = 1 + wastePercent / 100;
+  const materialAreaSqFt = areaSqFt * wasteMultiplier;
   const tileCount = tileSqFt ? Math.ceil((areaSqFt / tileSqFt) * wasteMultiplier) : 0;
   const mortar = mortarRecommendation(tileWidth, tileHeight);
   const mortarBags = Math.max(1, Math.ceil((areaSqFt * wasteMultiplier) / mortar.coverage));
@@ -1823,6 +1824,8 @@ export function LayoutPlanner() {
             <div className="scale-note">Each small square = 3 inches · Pinch to zoom</div>
           </div>
           <section className="print-only print-summary">
+            <div><span>Flooring area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div>
+            <div><span>Material area + {wastePercent}% waste</span><strong>{materialAreaSqFt.toFixed(1)} ft²</strong></div>
             <div><span>Vertical reference</span><strong>{formatLength(startLeftReference)} from left / {formatLength(startRightReference)} from right</strong></div>
             <div><span>Horizontal reference</span><strong>{formatLength(startTopReference)} from top / {formatLength(startBottomReference)} from bottom</strong></div>
             <div><span>Material estimate</span><strong>{tileCount} pieces including {wastePercent}% waste{materialType === "tile" ? ` · ${mortarBags} × 50 lb mortar bags` : ""}</strong></div>
@@ -1871,6 +1874,15 @@ export function LayoutPlanner() {
             {isRectangle(room) && <div className="field-row"><LengthField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} min={24} /><LengthField label="Length" value={roomHeight} onChange={(value) => resizeRectangle("height", value)} min={24} /></div>}
             <NumberField label="New wall thickness" value={wallThickness} onChange={(value) => { snapshot(); setWallThickness(value); }} suffix="in" min={1} step={.5} />
           </section>}
+
+          <section className="panel room-summary-panel">
+            <div className="panel-heading"><span className="eyebrow">Room summary</span><strong>{roomName.trim() || "Room"}</strong></div>
+            <div className="metrics">
+              <div><span>Flooring area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div>
+              <div><span>Material + {wastePercent}%</span><strong>{materialAreaSqFt.toFixed(1)} ft²</strong></div>
+              <div><span>Shape</span><strong>{isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom"}</strong></div>
+            </div>
+          </section>
 
           <section className="panel tile-panel">
             <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>{materialType === "tile" ? "Tile layout" : "Plank layout"}</strong></span><label className="switch"><input aria-label="Show material layout" type="checkbox" checked={showTile} onChange={(event) => { snapshot(); setShowTile(event.target.checked); }} /><span aria-hidden="true" /></label></div>
