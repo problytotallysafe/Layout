@@ -158,7 +158,18 @@ const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, i
 });
 
 
+const pointOnSegment = (point: Point, start: Point, end: Point, tolerance = 0.05) => {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const cross = Math.abs((point.x - start.x) * dy - (point.y - start.y) * dx) / length;
+  if (cross > tolerance) return false;
+  const dot = (point.x - start.x) * dx + (point.y - start.y) * dy;
+  return dot >= -tolerance && dot <= dx * dx + dy * dy + tolerance;
+};
+
 const pointInPolygon = (point: Point, polygon: Point[]) => {
+  if (polygon.some((start, index) => pointOnSegment(point, start, polygon[(index + 1) % polygon.length]))) return true;
   let inside = false;
   for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
     const a = polygon[index];
@@ -184,12 +195,13 @@ const closestPointOnSegment = (point: Point, start: Point, end: Point) => {
 };
 
 const nearestRoomEdge = (point: Point, polygon: Point[]) => {
-  let best: ReturnType<typeof closestPointOnSegment> & { index: number } | null = null;
-  polygon.forEach((start, index) => {
+  let best: (ReturnType<typeof closestPointOnSegment> & { index: number }) | null = null;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
     const end = polygon[(index + 1) % polygon.length];
     const candidate = { ...closestPointOnSegment(point, start, end), index };
-    if (!best || candidate.distance < best.distance) best = candidate;
-  });
+    if (best === null || candidate.distance < best.distance) best = candidate;
+  }
   return best;
 };
 
