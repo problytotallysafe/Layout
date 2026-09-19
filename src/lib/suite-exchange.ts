@@ -49,6 +49,14 @@ const inchPoint = (point: { x: number; y: number }) => ({
   x: mmToInches(point.x),
   y: mmToInches(point.y),
 });
+const polygonAreaSquareInches = (points: Point[]) =>
+  Math.abs(
+    points.reduce((sum, point, index) => {
+      const next = points[(index + 1) % points.length];
+      return sum + point.x * next.y - next.x * point.y;
+    }, 0),
+  ) / 2;
+const roundSquareFeet = (value: number) => Math.round(value * 100) / 100;
 const contextFor = (layout: SavedLayout) =>
   layout.suiteContext as SuiteContext | undefined;
 
@@ -186,6 +194,13 @@ export function layoutToSuite(
       (entity) => entity.kind !== "room.boundary" && !currentIds.has(entity.id),
     ) || [];
 
+  const flooringSquareFeet = roundSquareFeet(
+    polygonAreaSquareInches(layout.room) / 144,
+  );
+  const materialSquareFeetWithWaste = roundSquareFeet(
+    flooringSquareFeet * (1 + Math.max(0, layout.wastePercent) / 100),
+  );
+
   const room: SuiteRoom = {
     id: sourceRoom?.id || context?.sourceRoomId || `room_${layout.id}`,
     name: layout.roomName || sourceRoom?.name || layout.projectName,
@@ -213,6 +228,12 @@ export function layoutToSuite(
     extensions: {
       ...(sourceRoom?.extensions || {}),
       condition: sourceRoom?.extensions?.condition || "proposed",
+      roomSummary: {
+        flooringSquareFeet,
+        materialSquareFeetWithWaste,
+        wastePercent: layout.wastePercent,
+        calculatedBy: "layout",
+      },
       layout: {
         tileWidthMm: inchesToMm(layout.tileWidth),
         tileHeightMm: inchesToMm(layout.tileHeight),
@@ -221,6 +242,8 @@ export function layoutToSuite(
         appearance: layout.tileAppearance,
         pattern: layout.pattern,
         wastePercent: layout.wastePercent,
+        floorAreaSqFt: flooringSquareFeet,
+        materialAreaSqFtWithWaste: materialSquareFeetWithWaste,
         originMm: mmPoint(layout.origin),
         rotation: layout.rotation,
         showTile: layout.showTile,
