@@ -157,6 +157,101 @@ const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, i
   return point.x === next.x || point.y === next.y;
 });
 
+
+const pointInPolygon = (point: Point, polygon: Point[]) => {
+  let inside = false;
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const a = polygon[index];
+    const b = polygon[previous];
+    const crosses = (a.y > point.y) !== (b.y > point.y)
+      && point.x < (b.x - a.x) * (point.y - a.y) / ((b.y - a.y) || Number.EPSILON) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+};
+
+const closestPointOnSegment = (point: Point, start: Point, end: Point) => {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy || 1;
+  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1);
+  return {
+    point: { x: start.x + dx * t, y: start.y + dy * t },
+    t,
+    distance: Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t)),
+    angle: Math.atan2(dy, dx),
+  };
+};
+
+const nearestRoomEdge = (point: Point, polygon: Point[]) => {
+  let best: ReturnType<typeof closestPointOnSegment> & { index: number } | null = null;
+  polygon.forEach((start, index) => {
+    const end = polygon[(index + 1) % polygon.length];
+    const candidate = { ...closestPointOnSegment(point, start, end), index };
+    if (!best || candidate.distance < best.distance) best = candidate;
+  });
+  return best;
+};
+
+const translateItem = (item: DrawItem, dx: number, dy: number): DrawItem => ({
+  ...item,
+  start: { x: item.start.x + dx, y: item.start.y + dy },
+  end: { x: item.end.x + dx, y: item.end.y + dy },
+});
+
+const itemInsideRoom = (item: DrawItem, polygon: Point[]) =>
+  pointInPolygon(item.start, polygon)
+  && pointInPolygon(item.end, polygon);
+
+const constrainTranslationToRoom = (item: DrawItem, dx: number, dy: number, polygon: Point[]) => {
+  const requested = translateItem(item, dx, dy);
+  if (itemInsideRoom(requested, polygon)) return { dx, dy };
+
+  let low = 0;
+  let high = 1;
+  for (let iteration = 0; iteration < 18; iteration += 1) {
+    const factor = (low + high) / 2;
+    const candidate = translateItem(item, dx * factor, dy * factor);
+    if (itemInsideRoom(candidate, polygon)) low = factor;
+    else high = factor;
+  }
+  return { dx: dx * low, dy: dy * low };
+};
+
+const snapOpeningToBoundary = (item: DrawItem, polygon: Point[], threshold = 7): DrawItem => {
+  if (item.type !== "opening") return item;
+  const midpoint = {
+    x: (item.start.x + item.end.x) / 2,
+    y: (item.start.y + item.end.y) / 2,
+  };
+  const edge = nearestRoomEdge(midpoint, polygon);
+  if (!edge || edge.distance > threshold) return item;
+
+  const edgeStart = polygon[edge.index];
+  const edgeEnd = polygon[(edge.index + 1) % polygon.length];
+  const edgeDx = edgeEnd.x - edgeStart.x;
+  const edgeDy = edgeEnd.y - edgeStart.y;
+  const edgeLength = Math.hypot(edgeDx, edgeDy) || 1;
+  const itemLength = distance(item.start, item.end);
+  const half = Math.min(itemLength / 2, edgeLength / 2);
+  const unitX = edgeDx / edgeLength;
+  const unitY = edgeDy / edgeLength;
+
+  const minCenter = half;
+  const maxCenter = Math.max(half, edgeLength - half);
+  const projectedCenter = clamp(edge.t * edgeLength, minCenter, maxCenter);
+  const center = {
+    x: edgeStart.x + unitX * projectedCenter,
+    y: edgeStart.y + unitY * projectedCenter,
+  };
+
+  return {
+    ...item,
+    start: { x: center.x - unitX * half, y: center.y - unitY * half },
+    end: { x: center.x + unitX * half, y: center.y + unitY * half },
+  };
+};
+
 function cutAtBoundary(coordinate: number, tile: number, grout: number, rawOffset: number, side: CutObstacle["side"]) {
   const pitch = tile + grout;
   const phase = ((coordinate - rawOffset) % pitch + pitch) % pitch;
@@ -802,10 +897,15 @@ export function LayoutPlanner() {
         ...item,
         ...(() => {
           const original = { ...item, start: drag.originalStart, end: drag.originalEnd };
-          const delta = constrainWallTranslation(original, requestedDx, requestedDy, bounds);
+          const bounded = constrainWallTranslation(original, requestedDx, requestedDy, bounds);
+          const roomDelta = constrainTranslationToRoom(original, bounded.dx, bounded.dy, room);
+          const moved = translateItem(original, roomDelta.dx, roomDelta.dy);
+          const placed = item.type === "opening" && !event.altKey
+            ? snapOpeningToBoundary(moved, room)
+            : moved;
           return {
-            start: { x: drag.originalStart.x + delta.dx, y: drag.originalStart.y + delta.dy },
-            end: { x: drag.originalEnd.x + delta.dx, y: drag.originalEnd.y + delta.dy },
+            start: placed.start,
+            end: placed.end,
           };
         })(),
       } : item));
@@ -815,12 +915,18 @@ export function LayoutPlanner() {
       if (item.id !== drag.id) return item;
       const other = drag.endpoint === "start" ? item.end : item.start;
       const boundedPoint = item.type === "wall" ? clampWallPoint(point, item.thickness, bounds) : point;
-      const dx = Math.abs(boundedPoint.x - other.x);
-      const dy = Math.abs(boundedPoint.y - other.y);
-      const snapped = item.type === "wall" && !event.altKey
-        ? (dx > dy ? { x: boundedPoint.x, y: other.y } : { x: other.x, y: boundedPoint.y })
-        : boundedPoint;
-      return { ...item, [drag.endpoint]: snapped };
+      const roomPoint = pointInPolygon(boundedPoint, room)
+        ? boundedPoint
+        : nearestRoomEdge(boundedPoint, room)?.point ?? boundedPoint;
+      const dx = Math.abs(roomPoint.x - other.x);
+      const dy = Math.abs(roomPoint.y - other.y);
+      const axisSnapped = item.type === "wall" && !event.altKey
+        ? (dx > dy ? { x: roomPoint.x, y: other.y } : { x: other.x, y: roomPoint.y })
+        : roomPoint;
+      const resized = { ...item, [drag.endpoint]: axisSnapped };
+      return item.type === "opening" && !event.altKey
+        ? snapOpeningToBoundary(resized, room)
+        : resized;
     }));
   };
 
@@ -835,7 +941,17 @@ export function LayoutPlanner() {
     if (drag.kind === "draw" && distance(drag.start, drag.current) >= 3) {
       snapshot();
       const rawNext: DrawItem = { id: uid(), type: tool === "opening" ? "opening" : "wall", start: drag.start, end: drag.current, thickness: wallThickness };
-      const next = constrainWallToBounds(rawNext, bounds);
+      const bounded = constrainWallToBounds(rawNext, bounds);
+      const inside = itemInsideRoom(bounded, room)
+        ? bounded
+        : {
+            ...bounded,
+            start: pointInPolygon(bounded.start, room) ? bounded.start : nearestRoomEdge(bounded.start, room)?.point ?? bounded.start,
+            end: pointInPolygon(bounded.end, room) ? bounded.end : nearestRoomEdge(bounded.end, room)?.point ?? bounded.end,
+          };
+      const next = tool === "opening" && !event.altKey
+        ? snapOpeningToBoundary(inside, room)
+        : inside;
       setItems((current) => [...current, next]);
       setSelectedId(next.id);
       setTool("select");
@@ -1171,7 +1287,7 @@ export function LayoutPlanner() {
               </g>}
               {draftRoom.length > 0 && <g className="draft-room" pointerEvents="none"><polyline points={draftPath} />{draftRoom.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="2" />)}</g>}
             </svg>
-            <div className="scale-note">Each small square = 3 inches · Pinch to zoom</div>
+            <div className="scale-note">Each small square = 3 inches · Openings snap to boundary walls when nearby · Drag anywhere inside the room to move freely</div>
           </div>
           <section className="print-only print-summary">
             <div><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left / {formatLength(startRightReference)} from right</strong></div>
