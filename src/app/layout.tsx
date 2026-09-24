@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Layout — Tile planning by Buildr",
   description: "Draw a room, test tile layouts, and find a better starting point before installation.",
-  icons: { icon: "/favicon.svg" },
+  icons: { icon: ["/favicon.svg", { url: "/app-icon.png", sizes: "192x192", type: "image/png" }] },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
