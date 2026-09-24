@@ -52,7 +52,7 @@ jobs:
       - name: Verify release identity
         run: |
           grep -q 'applicationId "com.buildr.layout"' android/app/build.gradle
-          grep -q 'versionCode 1' android/app/build.gradle
+          grep -q 'versionCode 2' android/app/build.gradle
           grep -q 'versionName "1.0.0"' android/app/build.gradle
       - name: Verify companion-app source permissions
         run: |
