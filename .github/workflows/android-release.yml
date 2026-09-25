@@ -123,16 +123,16 @@ jobs:
           apksigner verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk | tee layout-apksigner-verify.txt
       - name: Record bundle metadata
         run: |
-          cp android/app/build/outputs/bundle/release/app-release.aab Layout-1.0.0-rc.aab
-          cp android/app/build/outputs/apk/release/app-release.apk Layout-1.0.0-release.apk
-          sha256sum Layout-1.0.0-rc.aab Layout-1.0.0-release.apk > layout-release.sha256
+          cp android/app/build/outputs/bundle/release/app-release.aab Layout-1.0.1-rc.aab
+          cp android/app/build/outputs/apk/release/app-release.apk Layout-1.0.1-release.apk
+          sha256sum Layout-1.0.1-rc.aab Layout-1.0.1-release.apk > layout-release.sha256
           grep -E 'applicationId|versionCode|versionName' android/app/build.gradle > layout-release-version.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: layout-1.0.0-release-candidate
+          name: layout-1.0.1-release-candidate
           path: |
-            Layout-1.0.0-rc.aab
-            Layout-1.0.0-release.apk
+            Layout-1.0.1-rc.aab
+            Layout-1.0.1-release.apk
             layout-release.sha256
             layout-release-version.txt
             layout-jarsigner-verify.txt
