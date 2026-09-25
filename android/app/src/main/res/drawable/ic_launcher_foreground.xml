@@ -3,11 +3,11 @@
     android:width="108dp" android:height="108dp"
     android:viewportWidth="512" android:viewportHeight="512">
   <group android:rotation="45" android:pivotX="142" android:pivotY="142">
-    <path android:fillColor="#F7F8F5" android:pathData="M100,88h84q12,0 12,12v84q0,12 -12,12h-84q-12,0 -12,-12v-84q0,-12 12,-12z"/>
+    <path android:fillColor="#C59A52" android:pathData="M100,88h84q12,0 12,12v84q0,12 -12,12h-84q-12,0 -12,-12v-84q0,-12 12,-12z"/>
     <path android:fillColor="#00000000" android:strokeColor="#0A4136" android:strokeWidth="12" android:strokeLineCap="round" android:pathData="M119,118h18M119,141h34M119,164h18"/>
   </group>
   <group android:rotation="45" android:pivotX="370" android:pivotY="370">
-    <path android:fillColor="#F7F8F5" android:pathData="M328,316h84q12,0 12,12v84q0,12 -12,12h-84q-12,0 -12,-12v-84q0,-12 12,-12z"/>
+    <path android:fillColor="#C59A52" android:pathData="M328,316h84q12,0 12,12v84q0,12 -12,12h-84q-12,0 -12,-12v-84q0,-12 12,-12z"/>
     <path android:fillColor="#00000000" android:strokeColor="#0A4136" android:strokeWidth="12" android:strokeLineCap="round" android:pathData="M347,346h18M347,369h34M347,392h18"/>
   </group>
   <group android:rotation="-45" android:pivotX="256" android:pivotY="256">
