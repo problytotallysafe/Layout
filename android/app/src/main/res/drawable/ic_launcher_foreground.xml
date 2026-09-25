@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Use the exact approved in-app artwork. Keep it within Android's 72dp
+     visible area of the 108dp adaptive layer to avoid launcher cropping. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="18dp" android:insetTop="18dp"
+    android:insetRight="18dp" android:insetBottom="18dp">
+    <bitmap android:src="@drawable/ic_launcher_art"
+        android:gravity="fill" android:filter="true" />
+</inset>
