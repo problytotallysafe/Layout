@@ -52,8 +52,8 @@ jobs:
       - name: Verify release identity
         run: |
           grep -q 'applicationId "com.buildr.layout"' android/app/build.gradle
-          grep -q 'versionCode 3' android/app/build.gradle
-          grep -q 'versionName "1.0.1"' android/app/build.gradle
+          grep -q 'versionCode 4' android/app/build.gradle
+          grep -q 'versionName "1.0.2"' android/app/build.gradle
       - name: Verify companion-app source permissions
         run: |
           if grep -Eq 'ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|FOREGROUND_SERVICE_LOCATION' android/app/src/main/AndroidManifest.xml; then
@@ -123,16 +123,16 @@ jobs:
           apksigner verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk | tee layout-apksigner-verify.txt
       - name: Record bundle metadata
         run: |
-          cp android/app/build/outputs/bundle/release/app-release.aab Layout-1.0.1-rc.aab
-          cp android/app/build/outputs/apk/release/app-release.apk Layout-1.0.1-release.apk
-          sha256sum Layout-1.0.1-rc.aab Layout-1.0.1-release.apk > layout-release.sha256
+          cp android/app/build/outputs/bundle/release/app-release.aab Layout-1.0.2-rc.aab
+          cp android/app/build/outputs/apk/release/app-release.apk Layout-1.0.2-release.apk
+          sha256sum Layout-1.0.2-rc.aab Layout-1.0.2-release.apk > layout-release.sha256
           grep -E 'applicationId|versionCode|versionName' android/app/build.gradle > layout-release-version.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: layout-1.0.1-release-candidate
+          name: layout-1.0.2-release-candidate
           path: |
-            Layout-1.0.1-rc.aab
-            Layout-1.0.1-release.apk
+            Layout-1.0.2-rc.aab
+            Layout-1.0.2-release.apk
             layout-release.sha256
             layout-release-version.txt
             layout-jarsigner-verify.txt

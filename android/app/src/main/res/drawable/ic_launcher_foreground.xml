@@ -1,19 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp" android:height="108dp"
-    android:viewportWidth="512" android:viewportHeight="512">
-  <group android:rotation="45" android:pivotX="142" android:pivotY="142">
-    <path android:fillColor="#C59A52" android:pathData="M100,88h84q12,0 12,12v84q0,12 -12,12h-84q-12,0 -12,-12v-84q0,-12 12,-12z"/>
-    <path android:fillColor="#00000000" android:strokeColor="#0A4136" android:strokeWidth="12" android:strokeLineCap="round" android:pathData="M119,118h18M119,141h34M119,164h18"/>
-  </group>
-  <group android:rotation="45" android:pivotX="370" android:pivotY="370">
-    <path android:fillColor="#C59A52" android:pathData="M328,316h84q12,0 12,12v84q0,12 -12,12h-84q-12,0 -12,-12v-84q0,-12 12,-12z"/>
-    <path android:fillColor="#00000000" android:strokeColor="#0A4136" android:strokeWidth="12" android:strokeLineCap="round" android:pathData="M347,346h18M347,369h34M347,392h18"/>
-  </group>
-  <group android:rotation="-45" android:pivotX="256" android:pivotY="256">
-    <path android:fillColor="#C59A52" android:pathData="M59,235l52,-30h278v102H111l-52,-30z"/>
-    <path android:fillColor="#E2BD78" android:fillAlpha="0.6" android:pathData="M110,205h278v28H110z"/>
-    <path android:fillColor="#E4C586" android:pathData="M388,205l55,51l-55,51z"/>
-    <path android:fillColor="#0A4136" android:pathData="M430,237l13,19l-13,19l-14,-19z"/>
-  </group>
-</vector>
+<!-- Use the exact approved in-app artwork. Keep it within Android's 72dp
+     visible area of the 108dp adaptive layer to avoid launcher cropping. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetLeft="18dp" android:insetTop="18dp"
+    android:insetRight="18dp" android:insetBottom="18dp">
+    <bitmap android:src="@drawable/ic_launcher_art"
+        android:gravity="fill" android:filter="true" />
+</inset>
