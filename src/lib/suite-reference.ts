@@ -25,9 +25,64 @@ export type SuiteReferenceSave =
       error: string;
     };
 
+async function adoptBuildrSession(
+  supabase: NonNullable<ReturnType<typeof getSupabaseBrowserClient>>,
+) {
+  if (typeof window === "undefined") return { attempted: false, error: null as Error | null };
+  try {
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const encoded = params.get("buildrAuth");
+    if (!encoded) return { attempted: false, error: null as Error | null };
+
+    const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const parsed = JSON.parse(atob(padded)) as {
+      access_token?: string;
+      refresh_token?: string;
+    };
+
+    params.delete("buildrAuth");
+    const url = new URL(window.location.href);
+    const nextHash = params.toString();
+    url.hash = nextHash ? `#${nextHash}` : "";
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+
+    if (!parsed.access_token || !parsed.refresh_token) {
+      return {
+        attempted: true,
+        error: new Error("The Buildr sign-in handoff was incomplete."),
+      };
+    }
+
+    const result = await supabase.auth.setSession({
+      access_token: parsed.access_token,
+      refresh_token: parsed.refresh_token,
+    });
+    return {
+      attempted: true,
+      error: result.error ? new Error(result.error.message) : null,
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      error:
+        error instanceof Error
+          ? error
+          : new Error("The Buildr sign-in handoff could not be read."),
+    };
+  }
+}
+
 async function signedInClient() {
   const supabase = getSupabaseBrowserClient();
   if (!supabase) return { supabase: null, user: null };
+
+  const handoff = await adoptBuildrSession(supabase);
+  if (handoff.attempted && handoff.error) {
+    await supabase.auth.signOut();
+    return { supabase, user: null };
+  }
+
   const { data } = await supabase.auth.getSession();
   return { supabase, user: data.session?.user ?? null };
 }
