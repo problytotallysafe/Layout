@@ -41,6 +41,7 @@ test("canonical fixture converts through Layout and preserves unsupported Floorp
   if (!imported.layout) return;
 
   assert.equal(imported.layout.suiteContext?.buildrProjectId, "suite-fixture-buildr-project-1");
+  assert.equal(imported.layout.surface, "floor");
   assert.equal(imported.layout.items.some((item) => item.id === "wall-1"), true);
   assert.equal(imported.layout.items.some((item) => item.id === "opening-1"), true);
 
@@ -57,6 +58,29 @@ test("canonical fixture converts through Layout and preserves unsupported Floorp
     parsed.value.project.rooms[0].entities.some((entity) => entity.id === "toilet-1" && entity.kind === "object.toilet"),
     true,
   );
+});
+
+test("wall tile surfaces round-trip through the shared suite envelope", () => {
+  const input = suiteToLayout(createSuiteEnvelope({
+    ...project,
+    rooms: [{
+      id: "wall_surface",
+      name: "Tub surround back wall",
+      displayUnit: "ft-in",
+      origin: { x: 0, y: 0 },
+      entities: [{
+        id: "wall_boundary",
+        kind: "room.boundary",
+        geometry: { vertices: [{ x: 0, y: 0 }, { x: 1524, y: 0 }, { x: 1524, y: 2438.4 }, { x: 0, y: 2438.4 }] },
+      }],
+      extensions: { layout: { surface: "wall" } },
+    }],
+  }, "layout", "1.0.0"));
+  assert.ok(input.layout);
+  if (!input.layout) return;
+  assert.equal(input.layout.surface, "wall");
+  const exported = layoutToSuite(input.layout);
+  assert.equal((exported.project.rooms[0].extensions?.layout as { surface?: string }).surface, "wall");
 });
 
 test("newer shared records open safely read-only", () => {

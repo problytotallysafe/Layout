@@ -92,19 +92,21 @@ export function SuiteAccountButton() {
   }
 
   return <>
-    <button className="icon-button" onClick={() => setOpen(true)} aria-label={userEmail ? `Account: ${userEmail}` : "Sign in to Buildr account"} title={userEmail || "Buildr account"}>
+    <button className="icon-button account-trigger" onClick={() => setOpen(true)} aria-label={userEmail ? `Account: ${userEmail}` : "Sign in or create a Buildr account"} title={userEmail || "Buildr account"}>
       {userEmail ? <Cloud size={18} /> : <UserRound size={18} />}
+      <span>{userEmail ? "Account" : "Sign in / Sign up"}</span>
     </button>
     {open && <div className="account-backdrop" onPointerDown={() => setOpen(false)}>
       <section className="account-dialog" role="dialog" aria-modal="true" aria-labelledby="suite-account-title" onPointerDown={(event) => event.stopPropagation()}>
         <div className="account-heading">
-          <div><span className="eyebrow">Buildr suite</span><h2 id="suite-account-title">{userEmail ? "Account & sync" : mode === "create" ? "Create account" : mode === "recovery" ? "Choose a new password" : "Sign in"}</h2></div>
+          <div><span className="eyebrow">Buildr suite</span><h2 id="suite-account-title">{userEmail ? "Account & sync" : mode === "create" ? "Create your Buildr account" : mode === "recovery" ? "Choose a new password" : "Sign in to Buildr"}</h2></div>
           <button onClick={() => setOpen(false)} aria-label="Close account"><X size={18} /></button>
         </div>
         {userEmail && mode !== "recovery" ? <>
           <p>Signed in as <strong>{userEmail}</strong>. Layouts save on this device first and synchronize when service is available.</p>
           <button className="account-secondary" onClick={signOut}><LogOut size={16} /> Sign out</button>
         </> : <form onSubmit={submit}>
+          {mode !== "recovery" && <p className="account-intro">Use the same account for Buildr, Floorplan, and Layout.</p>}
           {mode !== "recovery" && <label><span>Email</span><input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>}
           <label><span>{mode === "recovery" ? "New password" : "Password"}</span><input type="password" minLength={8} autoComplete={mode === "sign-in" ? "current-password" : "new-password"} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
           {message && <p className="account-message">{message}</p>}

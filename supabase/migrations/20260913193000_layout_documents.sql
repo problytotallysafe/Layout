@@ -16,6 +16,6 @@ alter table public.layout_documents enable row level security;
 
 create policy "Layout owners can read their documents" on public.layout_documents for select to authenticated using ((select auth.uid()) = owner_id and deleted_at is null);
 create policy "Layout owners can create documents" on public.layout_documents for insert to authenticated with check ((select auth.uid()) = owner_id and (organization_id is null or organization_id in (select private.user_organization_ids())));
-create policy "Layout owners can update their documents" on public.layout_documents for update to authenticated using ((select auth.uid()) = owner_id) with check ((select auth.uid()) = owner_id and (organization_id is null or organization_id in (select private.user_organization_ids())));
-create policy "Layout owners can delete their documents" on public.layout_documents for delete to authenticated using ((select auth.uid()) = owner_id);
+create policy "Layout owners can update documents" on public.layout_documents for update to authenticated using ((select auth.uid()) = owner_id) with check ((select auth.uid()) = owner_id and (organization_id is null or organization_id in (select private.user_organization_ids())));
+create policy "Layout owners can delete documents" on public.layout_documents for delete to authenticated using ((select auth.uid()) = owner_id);
 grant select, insert, update, delete on public.layout_documents to authenticated;

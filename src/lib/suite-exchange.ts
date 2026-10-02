@@ -20,6 +20,7 @@ type SuiteContext = {
 };
 
 type LayoutSettings = {
+  surface?: SavedLayout["surface"];
   tileWidthMm?: number;
   tileHeightMm?: number;
   groutMm?: number;
@@ -197,6 +198,7 @@ export function layoutToSuite(
       ...(sourceRoom?.extensions || {}),
       condition: sourceRoom?.extensions?.condition || "proposed",
       layout: {
+        surface: layout.surface,
         tileWidthMm: inchesToMm(layout.tileWidth),
         tileHeightMm: inchesToMm(layout.tileHeight),
         groutMm: inchesToMm(layout.grout),
@@ -278,6 +280,7 @@ export function suiteToLayout(input: unknown): {
       revision: Math.max(1, Number(parsed.value.source.revision) || 1),
       updatedAt: now,
       projectName: parsed.value.project.name,
+      surface: settings.surface === "wall" ? "wall" : "floor",
       room: vertices.map(inchPoint),
       items: imported,
       tileWidth: mmToInches(Number(settings.tileWidthMm || 304.8)),
