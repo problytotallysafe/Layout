@@ -1,6 +1,6 @@
 # Layout
 
-Layout is a lightweight floor-plan and tile-layout tool in the Buildr family. Draw a room, add walls and openings, enter the material and grout dimensions, then balance or fine-tune the tile starting point before installation.
+Layout is a lightweight floor, wall, and tile-layout tool in the Buildr family. Plan a floor or an individual wall surface, add features and openings, enter the material and grout dimensions, then balance or fine-tune the tile starting point before installation.
 
 ## Current capabilities
 
@@ -8,10 +8,12 @@ Layout is a lightweight floor-plan and tile-layout tool in the Buildr family. Dr
 - Draw, select, resize, and precisely dimension walls and openings
 - Set wall thickness
 - Preview tile and grout at scale inside the room shape
+- Switch between floor and vertical-wall tile surfaces, with wall width and height saved per layout
 - Rotate material, automatically balance perimeter cuts, and nudge the starting point
 - Flag small edge cuts and estimate floor area and tile quantity with waste
 - Undo and redo drawing changes
 - Automatically save the working draft on the device
+- Sign in or create a shared Buildr account to synchronize saved layouts
 - Responsive desktop and mobile workspaces
 
 ## Development

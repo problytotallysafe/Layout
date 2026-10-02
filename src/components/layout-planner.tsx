@@ -14,6 +14,7 @@ import { SuiteAccountButton } from "@/components/suite-account";
 
 export type Point = { x: number; y: number };
 export type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
+export type LayoutSurface = "floor" | "wall";
 type Tool = "select" | "pan" | "floor" | "room" | "wall" | "opening";
 type MaterialUnit = "in" | "mm" | "cm";
 type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
@@ -29,6 +30,7 @@ type Snapshot = { room: Point[]; items: DrawItem[] };
 type PinchState = { distance: number; zoom: number; canvasCenter: Point };
 export type LayoutData = Snapshot & {
   projectName: string;
+  surface: LayoutSurface;
   tileWidth: number;
   tileHeight: number;
   grout: number;
@@ -59,6 +61,7 @@ const blankLayout = (id = uid(), projectName = "Untitled layout"): SavedLayout =
   revision: 1,
   updatedAt: Date.now(),
   projectName,
+  surface: "floor",
   room: DEFAULT_ROOM.map((point) => ({ ...point })),
   items: [],
   tileWidth: 12,
@@ -362,6 +365,7 @@ function mortarRecommendation(tileWidth: number, tileHeight: number) {
 
 export function LayoutPlanner() {
   const [projectName, setProjectName] = useState("Untitled bathroom");
+  const [surface, setSurface] = useState<LayoutSurface>("floor");
   const [room, setRoom] = useState<Point[]>(DEFAULT_ROOM);
   const [draftRoom, setDraftRoom] = useState<Point[]>([]);
   const [items, setItems] = useState<DrawItem[]>([
@@ -482,6 +486,7 @@ export function LayoutPlanner() {
   const applyLayout = useCallback((layout: SavedLayout) => {
     const restoredBounds = roomBounds(layout.room);
     setProjectName(layout.projectName);
+    setSurface(layout.surface || "floor");
     setRoom(layout.room);
     setItems(layout.items.map((item) => constrainWallToBounds(item, restoredBounds)));
     setTileWidth(layout.tileWidth);
@@ -519,6 +524,7 @@ export function LayoutPlanner() {
       revision: (existing?.revision ?? 0) + 1,
       updatedAt: Date.now(),
       projectName: projectName.trim() || "Untitled layout",
+      surface,
       room,
       items,
       tileWidth,
@@ -541,7 +547,7 @@ export function LayoutPlanner() {
     window.localStorage.setItem(LEGACY_DRAFT_KEY, JSON.stringify(document));
     setSaved(true);
     return document;
-  }, [activeLayoutId, grout, items, materialUnit, origin, persistLibrary, projectName, room, rotation, showTile, suiteContext, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
+  }, [activeLayoutId, grout, items, materialUnit, origin, persistLibrary, projectName, room, rotation, showTile, suiteContext, surface, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1108,6 +1114,8 @@ export function LayoutPlanner() {
   const materialStep = materialUnit === "in" ? .125 : materialUnit === "mm" ? 1 : .1;
   const groutMin = materialUnit === "in" ? .0625 : materialUnit === "mm" ? 1 : .1;
   const groutStep = materialUnit === "in" ? .0625 : materialUnit === "mm" ? .5 : .05;
+  const surfaceName = surface === "wall" ? "Wall" : "Floor";
+  const surfaceNameLower = surface;
 
   return (
     <main className="app-shell">
@@ -1162,7 +1170,7 @@ export function LayoutPlanner() {
             {[...savedLayouts].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt - a.updatedAt).map((layout) => <article className={`layout-card ${layout.id === activeLayoutId ? "active" : ""} ${layout.archivedAt ? "archived" : ""}`} key={layout.id}>
               <button className="layout-open" onClick={() => openSavedLayout(layout.id)}>
                 <strong>{layout.projectName}</strong>
-                <span>{formatLength(roomBounds(layout.room).maxX - roomBounds(layout.room).minX)} × {formatLength(roomBounds(layout.room).maxY - roomBounds(layout.room).minY)}</span>
+                <span>{layout.surface === "wall" ? "Wall" : "Floor"} · {formatLength(roomBounds(layout.room).maxX - roomBounds(layout.room).minX)} × {formatLength(roomBounds(layout.room).maxY - roomBounds(layout.room).minY)}</span>
                 <small>{layout.archivedAt ? "Archived · " : layout.id === activeLayoutId ? "Currently editing · " : ""}Saved {new Date(layout.updatedAt).toLocaleString()}</small>
               </button>
               <div className="layout-card-actions">
@@ -1178,7 +1186,7 @@ export function LayoutPlanner() {
 
       <section className={readOnly?"workspace workspace-readonly":"workspace"}>
         <nav className="toolrail" aria-label="Drawing tools">
-          {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"] ] as const).map(([value, Icon, label]) => (
+          {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Tile field"], ["room", SquareDashedMousePointer, surface === "wall" ? "Wall area" : "Room"], ["wall", BrickWall, surface === "wall" ? "Feature" : "Wall"], ["opening", DoorOpen, "Opening"] ] as const).map(([value, Icon, label]) => (
             <button key={value} className={tool === value ? "active" : ""} onClick={() => { setTool(value); setDraftRoom([]); setSelectedId(null); }} aria-pressed={tool === value}>
               <Icon size={21} /><span>{label}</span>
             </button>
@@ -1187,20 +1195,20 @@ export function LayoutPlanner() {
 
         <section className="canvas-column">
           <header className="print-only print-header">
-            <div><span>LAYOUT</span><strong>{projectName}</strong></div>
+            <div><span>LAYOUT · {surfaceName.toUpperCase()}</span><strong>{projectName}</strong></div>
             <dl>
-              <div><dt>Room</dt><dd>{formatLength(roomWidth)} × {formatLength(roomHeight)}</dd></div>
+              <div><dt>{surfaceName}</dt><dd>{formatLength(roomWidth)} × {formatLength(roomHeight)}</dd></div>
               <div><dt>Tile</dt><dd>{formatLength(tileWidth)} × {formatLength(tileHeight)}</dd></div>
               <div><dt>Grout</dt><dd>{formatLength(grout)}</dd></div>
-              <div><dt>Floor area</dt><dd>{areaSqFt.toFixed(1)} ft²</dd></div>
+              <div><dt>{surfaceName} area</dt><dd>{areaSqFt.toFixed(1)} ft²</dd></div>
             </dl>
           </header>
           <div className="canvas-toolbar">
             <div className="mode-copy">
-              <strong>{{ select: "Select and adjust", pan: "Move around the plan", floor: "Move the tile field", wall: "Draw a straight wall", opening: "Mark an opening", room: "Draw the room perimeter" }[tool]}</strong>
-              <span>{{ select: "Drag a selected wall to move it, or drag either end to resize it.", pan: "Drag the work area after zooming in.", floor: "Grab the floor and drag the entire tile layout in any direction.", wall: "Walls snap straight. Hold Alt only when you need an angle.", opening: "Openings snap straight along the wall.", room: "Tap each corner, then finish the room." }[tool]}</span>
+              <strong>{{ select: "Select and adjust", pan: "Move around the plan", floor: "Move the tile field", wall: surface === "wall" ? "Draw a feature line" : "Draw a straight wall", opening: "Mark an opening", room: surface === "wall" ? "Draw the wall area" : "Draw the room perimeter" }[tool]}</strong>
+              <span>{{ select: "Drag a selected feature to move it, or drag either end to resize it.", pan: "Drag the work area after zooming in.", floor: `Grab the ${surfaceNameLower} tile field and move the entire layout.`, wall: surface === "wall" ? "Use feature lines for ledges, borders, or other cut references." : "Walls snap straight. Hold Alt only when you need an angle.", opening: "Openings snap straight along the nearest boundary.", room: surface === "wall" ? "Tap each corner of the tiled wall area, then finish the surface." : "Tap each corner, then finish the room." }[tool]}</span>
             </div>
-            {tool === "room" && <div className="draft-actions"><button className="text-button" onClick={cancelRoom}>Cancel</button><button className="primary small" disabled={draftRoom.length < 3} onClick={finishRoom}>Finish room</button></div>}
+            {tool === "room" && <div className="draft-actions"><button className="text-button" onClick={cancelRoom}>Cancel</button><button className="primary small" disabled={draftRoom.length < 3} onClick={finishRoom}>Finish {surface === "wall" ? "surface" : "room"}</button></div>}
             <div className="zoom-controls">
               <button onClick={() => changeZoom(zoom - 0.2)} aria-label="Zoom out"><ZoomOut size={17} /></button>
               <span>{Math.round(zoom * 100)}%</span>
@@ -1215,7 +1223,7 @@ export function LayoutPlanner() {
               onPointerUpCapture={endPointerTracking} onPointerCancelCapture={endPointerTracking}
               onPointerDown={startDrawing} onPointerMove={movePointer} onPointerUp={endPointer} onPointerCancel={endPointer}
               onWheel={(event) => { event.preventDefault(); changeZoom(zoom * (event.deltaY > 0 ? .9 : 1.1)); }}
-              role="img" aria-label="Editable floor plan and tile layout">
+              role="img" aria-label={`Editable ${surfaceNameLower} tile layout`}>
               <defs>
                 <pattern id="minor-grid" width="3" height="3" patternUnits="userSpaceOnUse"><path d="M 3 0 L 0 0 0 3" fill="none" stroke="#d9dfdb" strokeWidth=".25" /></pattern>
                 <pattern id="major-grid" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="12" height="12" fill="url(#minor-grid)" /><path d="M 12 0 L 0 0 0 12" fill="none" stroke="#b9c4bd" strokeWidth=".45" /></pattern>
@@ -1299,7 +1307,7 @@ export function LayoutPlanner() {
               </g>}
               {draftRoom.length > 0 && <g className="draft-room" pointerEvents="none"><polyline points={draftPath} />{draftRoom.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="2" />)}</g>}
             </svg>
-            <div className="scale-note">Each small square = 3 inches · Openings snap to boundary walls when nearby · Drag anywhere inside the room to move freely</div>
+            <div className="scale-note">Each small square = 3 inches · Openings snap to the nearest boundary · Drag the tile field to adjust the starting position</div>
           </div>
           <section className="print-only print-summary">
             <div><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left / {formatLength(startRightReference)} from right</strong></div>
@@ -1310,7 +1318,7 @@ export function LayoutPlanner() {
 
         <aside className="inspector">
           {selected ? <section className="panel selected-panel">
-            <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? "Wall" : "Opening"}</strong></div>
+            <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? (surface === "wall" ? "Feature line" : "Wall") : "Opening"}</strong></div>
             <NumberField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} suffix="in" min={1} />
             <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => setItems((current) => current.map((item) => item.id === selected.id ? constrainWallToBounds({ ...item, thickness: value }, bounds) : item))} suffix="in" min={1} step={.5} />
             {selected.type === "wall" && guideWallOrientation === "vertical" && <div className="field-row wall-offset-fields">
@@ -1321,13 +1329,18 @@ export function LayoutPlanner() {
               <OffsetField label="From top" inches={guideTopFace - bounds.minY} onCommit={(value) => setWallOffset("top", value)} />
               <OffsetField label="From bottom" inches={bounds.maxY - guideBottomFace} onCommit={(value) => setWallOffset("bottom", value)} />
             </div>}
-            {selected.type === "wall" && <p className="selection-hint">Drag the wall to reposition it. Gold dimensions measure from both room borders to the nearest wall face. Use the fields above to enter an exact offset. The guides are visible only while this wall is selected.</p>}
+            {selected.type === "wall" && <p className="selection-hint">Drag the {surface === "wall" ? "feature" : "wall"} to reposition it. Gold dimensions measure from both surface borders to its nearest face. Use the fields above to enter an exact offset. The guides are visible only while it is selected.</p>}
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
             <button className="delete-button" onClick={() => { snapshot(); setItems((current) => current.filter((item) => item.id !== selected.id)); setSelectedId(null); }}>Delete {selected.type}</button>
           </section> : <section className="panel">
-            <div className="panel-heading"><span className="eyebrow">Room</span><strong>{isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom shape"}</strong></div>
-            {isRectangle(room) && <div className="field-row"><NumberField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} suffix="in" min={24} /><NumberField label="Length" value={roomHeight} onChange={(value) => resizeRectangle("height", value)} suffix="in" min={24} /></div>}
-            <NumberField label="New wall thickness" value={wallThickness} onChange={setWallThickness} suffix="in" min={1} step={.5} />
+            <div className="panel-heading"><span className="eyebrow">Surface</span><strong>{surfaceName} · {isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom shape"}</strong></div>
+            <div className="surface-picker" aria-label="Tile surface">
+              <button className={surface === "floor" ? "active" : ""} aria-pressed={surface === "floor"} onClick={() => setSurface("floor")}>Floor</button>
+              <button className={surface === "wall" ? "active" : ""} aria-pressed={surface === "wall"} onClick={() => setSurface("wall")}>Wall</button>
+            </div>
+            <p className="surface-help">Each saved layout represents one tiled surface. Create another layout for each additional wall.</p>
+            {isRectangle(room) && <div className="field-row"><NumberField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} suffix="in" min={24} /><NumberField label={surface === "wall" ? "Height" : "Length"} value={roomHeight} onChange={(value) => resizeRectangle("height", value)} suffix="in" min={24} /></div>}
+            {surface === "floor" && <NumberField label="New wall thickness" value={wallThickness} onChange={setWallThickness} suffix="in" min={1} step={.5} />}
           </section>}
 
           <section className="panel tile-panel">
@@ -1349,15 +1362,15 @@ export function LayoutPlanner() {
               </div>
             </div>
             <div className="button-row"><button className="secondary" onClick={() => setRotation((value) => value === 0 ? 90 : 0)}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Optimize cuts</button></div>
-            <button className={`grab-floor-button ${tool === "floor" ? "active" : ""}`} onClick={() => { setShowTile(true); setTool("floor"); setSelectedId(null); }}><Move size={16} /> {tool === "floor" ? "Drag the floor on the plan" : "Grab and move floor"}</button>
+            <button className={`grab-floor-button ${tool === "floor" ? "active" : ""}`} onClick={() => { setShowTile(true); setTool("floor"); setSelectedId(null); }}><Move size={16} /> {tool === "floor" ? `Drag the ${surfaceNameLower} tile field` : "Grab and move tile field"}</button>
             <div className="nudge-control"><span>Precision adjustment · 1/4″</span><div><button onClick={() => setOrigin((point) => ({ ...point, x: point.x - .25 }))} aria-label="Move layout left">←</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y - .25 }))} aria-label="Move layout up">↑</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y + .25 }))} aria-label="Move layout down">↓</button><button onClick={() => setOrigin((point) => ({ ...point, x: point.x + .25 }))} aria-label="Move layout right">→</button></div></div>
           </section>
 
           <section className="panel results-panel">
             <div className="panel-heading inline-heading"><span><span className="eyebrow">Layout check</span><strong>{cutWarning ? "Review edge cuts" : "Cuts look balanced"}</strong></span><span className={`result-icon ${cutWarning ? "warning" : ""}`}>{cutWarning ? "!" : <Check size={17} />}</span></div>
-            <div className="metrics"><div><span>Floor area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest planned cut</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
+            <div className="metrics"><div><span>{surfaceName} area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest planned cut</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
             <div className="start-reference-card"><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left · {formatLength(startRightReference)} from right</strong><span>Horizontal chalk line</span><strong>{formatLength(startTopReference)} from top · {formatLength(startBottomReference)} from bottom</strong></div>
-            <p>{cutWarning ? "A room edge, wall face, wall end, or opening may create a cut below half a tile. Use Optimize cuts, drag the floor, or nudge it precisely." : "The current tile position avoids small cuts across the room edges, walls, and openings being checked."}</p>
+            <p>{cutWarning ? `A ${surfaceNameLower} edge, feature, or opening may create a cut below half a tile. Use Optimize cuts, drag the tile field, or nudge it precisely.` : `The current tile position avoids small cuts across the ${surfaceNameLower} edges, features, and openings being checked.`}</p>
           </section>
 
           <section className="panel install-panel">
@@ -1369,7 +1382,7 @@ export function LayoutPlanner() {
       </section>
 
       <nav className="mobile-tools" aria-label="Drawing tools">
-        {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Floor"], ["room", SquareDashedMousePointer, "Room"], ["wall", BrickWall, "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Tile"] ] as const).map(([value, Icon, label]) => (
+        {([ ["select", MousePointer2, "Select"], ["pan", Hand, "Pan"], ["floor", Move, "Tile"], ["room", SquareDashedMousePointer, surface === "wall" ? "Wall area" : "Room"], ["wall", BrickWall, surface === "wall" ? "Feature" : "Wall"], ["opening", DoorOpen, "Opening"], ["tile", Grid3X3, "Settings"] ] as const).map(([value, Icon, label]) => (
           <button key={value} className={value !== "tile" && tool === value ? "active" : ""} onClick={() => { if (value === "tile") document.querySelector(".tile-panel")?.scrollIntoView({ behavior: "smooth" }); else setTool(value); }}><Icon size={19} /><span>{label}</span></button>
         ))}
       </nav>
