@@ -92,7 +92,7 @@ export function SuiteAccountButton() {
   }
 
   return <>
-    <button className="icon-button account-trigger" onClick={() => setOpen(true)} aria-label={userEmail ? `Account: ${userEmail}` : "Sign in or create a Buildr account"} title={userEmail || "Buildr account"}>
+    <button type="button" className="icon-button account-trigger" onPointerDown={() => setOpen(true)} onClick={() => setOpen(true)} aria-label={userEmail ? `Account: ${userEmail}` : "Sign in or create a Buildr account"} title={userEmail || "Buildr account"}>
       {userEmail ? <Cloud size={18} /> : <UserRound size={18} />}
       <span>{userEmail ? "Account" : "Sign in / Sign up"}</span>
     </button>
