@@ -30,7 +30,12 @@ export function SuiteAccountButton() {
         setMode("recovery");
         setOpen(true);
       }
-      window.dispatchEvent(new CustomEvent("buildr:auth-change"));
+      // Supabase emits INITIAL_SESSION as soon as this listener subscribes.
+      // Remounting the planner for that event would subscribe again and create
+      // a remount loop that prevents the account dialog from staying open.
+      if (event !== "INITIAL_SESSION" && event !== "TOKEN_REFRESHED") {
+        window.dispatchEvent(new CustomEvent("buildr:auth-change"));
+      }
     });
     return () => {
       mounted = false;
