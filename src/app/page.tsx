@@ -1,5 +1,5 @@
-import { LayoutShell } from "@/components/layout-shell";
+import LayoutAuthGate from "@/components/layout-auth-gate";
 
 export default function Home() {
-  return <LayoutShell />;
+  return <LayoutAuthGate />;
 }

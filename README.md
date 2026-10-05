@@ -13,7 +13,8 @@ Layout is a lightweight floor, wall, and tile-layout tool in the Buildr family. 
 - Flag small edge cuts and estimate floor area and tile quantity with waste
 - Undo and redo drawing changes
 - Automatically save the working draft on the device
-- Sign in or create a shared Buildr account to synchronize saved layouts
+- Create a shared Buildr account or sign in before using Layout; the same credentials work in Buildr and Floorplan
+- Synchronize saved layouts to the signed-in account
 - Responsive desktop and mobile workspaces
 
 ## Development
