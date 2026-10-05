@@ -62,7 +62,7 @@ export default function LayoutAuthGate() {
     }
 
     let mounted = true;
-    void supabase.auth.getSession().then(({ data }) => {
+    void supabase.auth.getSession().then(({ data }: { data: { session: Session | null } }) => {
       if (!mounted) return;
       setSession(data.session);
       setChecking(false);
