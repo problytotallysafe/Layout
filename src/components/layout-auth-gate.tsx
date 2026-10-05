@@ -55,11 +55,6 @@ function PlanShowcase() {
         </span>
         Cuts balanced
       </div>
-      <div className="absolute -left-2 bottom-16 z-10 rounded-xl border border-white/70 bg-[#183d32] px-3 py-2 text-white shadow-xl sm:-left-4 sm:bottom-[4.5rem] sm:px-4">
-        <div className="text-[9px] font-bold uppercase tracking-[0.16em] text-[#d6ad67]">Tile layout</div>
-        <div className="mt-1 text-sm font-extrabold">12 × 24 in</div>
-      </div>
-
       <div className="overflow-hidden rounded-[1.7rem] border border-white/70 bg-[#f3f0e7] p-3 shadow-[0_26px_70px_rgba(3,20,14,0.35)] sm:p-5">
         <div className="mb-3 flex items-center justify-between px-1 sm:mb-4 sm:px-2">
           <div>
