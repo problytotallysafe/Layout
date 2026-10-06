@@ -264,9 +264,11 @@ export default function LayoutAuthGate() {
       <div className="mx-auto grid min-h-[100dvh] max-w-[1480px] lg:grid-cols-[minmax(0,1fr)_440px]">
         <section className="flex flex-col justify-center px-5 py-8 sm:px-9 sm:py-10 xl:px-14">
           <div className="mb-8 flex items-center gap-3 sm:mb-10">
-            <div className="grid h-11 w-11 place-items-center rounded-xl border border-white/15 bg-white/10 text-[#e3bd72]">
-              <Grid2X2 size={22} strokeWidth={2.3} />
-            </div>
+            <div
+              className="h-11 w-11 rounded-xl bg-cover bg-center shadow-[0_4px_14px_rgba(0,0,0,0.18)]"
+              style={{ backgroundImage: "url('/app-icon-512.png')" }}
+              aria-hidden="true"
+            />
             <div>
               <div className="text-lg font-black tracking-[0.12em] text-white">LAYOUT</div>
               <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#d6ad67]">A Buildr Suite tool</div>

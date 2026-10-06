@@ -2,7 +2,7 @@
 
 import {
   Archive, ArchiveRestore, BrickWall, Check, ChevronDown, CloudOff, Copy, DoorOpen, FolderOpen, Grid3X3, Hand, MousePointer2, Move,
-  PencilRuler, Plus, Printer, Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Trash2, Undo2, X, Download, Upload, ExternalLink,
+  Plus, Printer, Redo2, RotateCw, Save, Sparkles, SquareDashedMousePointer, Trash2, Undo2, X, Download, Upload, ExternalLink,
   ZoomIn, ZoomOut,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1122,7 +1122,7 @@ export function LayoutPlanner() {
       <input ref={importInputRef} hidden type="file" accept=".json,.buildr.json,application/json" onChange={(event)=>{void importShared(event.target.files?.[0]);event.currentTarget.value=""}}/>
       <header className="topbar">
         <div className="brand" aria-label="Layout by Buildr">
-          <span className="brand-mark"><PencilRuler size={22} strokeWidth={2.25} /></span>
+          <span className="brand-mark" aria-hidden="true" />
           <span className="brand-name">Layout</span><span className="brand-family">by Buildr</span>
         </div>
         <label className="project-name">
