@@ -406,7 +406,10 @@ function mortarRecommendation(tileWidth: number, tileHeight: number) {
   return { trowel: "1/2″ × 1/2″ or larger", coverage: 32 };
 }
 
-export function LayoutPlanner() {
+export function LayoutPlanner({ previewOnly = false }: { previewOnly?: boolean }) {
+  const LIBRARY_KEY = previewOnly ? "layout-review-library-v1" : "layout-library-v1";
+  const ACTIVE_LAYOUT_KEY = previewOnly ? "layout-review-active-v1" : "layout-active-id-v1";
+  const LEGACY_DRAFT_KEY = previewOnly ? "layout-review-draft-v1" : "layout-draft-v1";
   const [projectName, setProjectName] = useState("Untitled bathroom");
   const [surface, setSurface] = useState<LayoutSurface>("floor");
   const [room, setRoom] = useState<Point[]>(DEFAULT_ROOM);
@@ -675,7 +678,7 @@ export function LayoutPlanner() {
     if (!hydrated) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      if (!isSupabaseConfigured() || !navigator.onLine) {
+      if (previewOnly || !isSupabaseConfigured() || !navigator.onLine) {
         setSyncState(navigator.onLine ? "device" : "offline");
         setCloudHydrated(true);
         return;
@@ -701,7 +704,7 @@ export function LayoutPlanner() {
       });
     }, 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [applyLayout, authVersion, hydrated, persistLibrary]);
+  }, [applyLayout, authVersion, hydrated, persistLibrary, previewOnly]);
 
   useEffect(() => {
     if (!hydrated || deepLinkHandledRef.current) return;
@@ -718,6 +721,7 @@ export function LayoutPlanner() {
     const timer = window.setTimeout(async () => {
       const document = saveCurrentLayout();
       if (!document) return;
+      if (previewOnly) { setSyncState("device"); return; }
       if (!navigator.onLine) { setSyncState("offline"); return; }
       setSyncState("saving");
       try {
@@ -730,10 +734,10 @@ export function LayoutPlanner() {
       window.clearTimeout(pendingTimer);
       window.clearTimeout(timer);
     };
-  }, [activeLayoutId, cloudHydrated, hydrated, saveCurrentLayout]);
+  }, [activeLayoutId, cloudHydrated, hydrated, saveCurrentLayout, previewOnly]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || previewOnly) return;
     const offline = () => setSyncState("offline");
     const online = () => {
       setSyncState("saving");
@@ -745,7 +749,7 @@ export function LayoutPlanner() {
     window.addEventListener("offline", offline);
     window.addEventListener("online", online);
     return () => { window.removeEventListener("offline", offline); window.removeEventListener("online", online); };
-  }, [hydrated]);
+  }, [hydrated, previewOnly]);
 
   const createNewLayout = () => {
     saveCurrentLayout();
@@ -799,8 +803,8 @@ export function LayoutPlanner() {
     if (!next.length) next = [blankLayout()];
     const nextActive = id === activeLayoutId ? next[0] : next.find((layout) => layout.id === activeLayoutId) || next[0];
     persistLibrary(next, nextActive.id);
-    queueCloudDeletion(id);
-    if (navigator.onLine) void flushCloudDeletions().then((complete) => {
+    if (!previewOnly) queueCloudDeletion(id);
+    if (!previewOnly && navigator.onLine) void flushCloudDeletions().then((complete) => {
       if (!complete) setSyncState("failed");
     });
     if (id === activeLayoutId) {
@@ -830,7 +834,7 @@ export function LayoutPlanner() {
     setActiveLayoutId(nextActive.id);
     applyLayout(nextActive);
     setSaved(true);
-    if (navigator.onLine) void saveCloudLayouts([changed]).then((result) => {
+    if (!previewOnly && navigator.onLine) void saveCloudLayouts([changed]).then((result) => {
       setSyncState(result.conflicts.length ? "conflict" : result.cloudSaved ? "saved" : "device");
     }).catch(() => setSyncState("failed"));
   };
@@ -1358,13 +1362,14 @@ export function LayoutPlanner() {
           <button className="icon-button" onClick={() => { saveCurrentLayout(); setLibraryOpen(true); }} aria-label="Saved layouts" title="Saved layouts"><FolderOpen size={18} /></button>
           <button className="icon-button" onClick={()=>importInputRef.current?.click()} aria-label="Import shared project" title="Import shared project"><Upload size={18}/></button>
           <button className="icon-button" onClick={exportShared} aria-label="Export shared project" title="Export shared project"><Download size={18}/></button>
-          <button className="icon-button" onClick={returnToBuildr} aria-label="Return result to Buildr" title="Return result to Buildr"><ExternalLink size={18}/></button>
-          <SuiteAccountButton />
+          {!previewOnly && <button className="icon-button" onClick={returnToBuildr} aria-label="Return result to Buildr" title="Return result to Buildr"><ExternalLink size={18}/></button>}
+          {!previewOnly && <SuiteAccountButton />}
           <button className="icon-button" onClick={printLayout} aria-label="Print layout" title="Print layout"><Printer size={18} /></button>
           <button className="icon-button" onClick={undo} disabled={!history.length} aria-label="Undo"><Undo2 size={18} /></button>
           <button className="icon-button" onClick={redo} disabled={!future.length} aria-label="Redo"><Redo2 size={18} /></button>
         </div>
       </header>
+      {previewOnly && <div className="review-banner">Review preview · Your test layouts save only on this device. Buildr job syncing is disabled here.</div>}
       {readOnly&&<div className="readonly-banner">Created by a newer Buildr app version · view, print, and export only</div>}
 
       {conflicts[0] && <div className="conflict-backdrop">

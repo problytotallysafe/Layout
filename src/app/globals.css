@@ -262,6 +262,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .workspace-readonly { pointer-events: none; opacity: .92; }
 
 .history-controls { display: flex; gap: 5px; }
+.review-banner { padding: 7px 15px; background: #fff4d8; border-bottom: 1px solid #d7b86b; color: #5c461d; text-align: center; font-size: .78rem; font-weight: 700; }
 .history-controls button { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--ink); font-weight: 750; cursor: pointer; }
 .history-controls button:disabled { opacity: .38; cursor: default; }
 .dimension-bubble { cursor: pointer; }
