@@ -8,7 +8,7 @@ import {
   type SuiteProject,
   type SuiteRoom,
 } from "./suite-contract.ts";
-import type { DrawItem, Point, SavedLayout } from "../components/layout-planner";
+import type { DrawItem, Niche, Point, SavedLayout } from "../components/layout-planner";
 
 type SuiteContext = {
   organizationId: string | null;
@@ -29,6 +29,11 @@ type LayoutSettings = {
   originMm?: { x: number; y: number };
   rotation?: number;
   showTile?: boolean;
+  pattern?: SavedLayout["pattern"];
+  method?: SavedLayout["method"];
+  referenceLine?: string;
+  niches?: { id: string; xMm: number; yMm: number; widthMm: number; heightMm: number; depthMm: number;
+    shelves: { id: string; fromBottomMm: number; thicknessMm: number }[] }[];
 };
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -207,6 +212,14 @@ export function layoutToSuite(
         originMm: mmPoint(layout.origin),
         rotation: layout.rotation,
         showTile: layout.showTile,
+        pattern: layout.pattern || "stack",
+        method: layout.method || "edge",
+        referenceLine: layout.referenceLine || "",
+        niches: (layout.niches || []).map((niche) => ({
+          id: niche.id, xMm: inchesToMm(niche.x), yMm: inchesToMm(niche.y),
+          widthMm: inchesToMm(niche.width), heightMm: inchesToMm(niche.height), depthMm: inchesToMm(niche.depth),
+          shelves: niche.shelves.map((shelf) => ({ id: shelf.id, fromBottomMm: inchesToMm(shelf.fromBottom), thicknessMm: inchesToMm(shelf.thickness) })),
+        })),
       },
     },
   };
@@ -296,6 +309,16 @@ export function suiteToLayout(input: unknown): {
           : { x: 0, y: 0 },
       rotation: settings.rotation === 90 ? 90 : 0,
       showTile: settings.showTile !== false,
+      pattern: settings.pattern || "stack",
+      method: settings.method || "edge",
+      referenceLine: settings.referenceLine || "",
+      niches: (settings.niches || []).map((niche): Niche => ({
+        id: niche.id, x: mmToInches(niche.xMm), y: mmToInches(niche.yMm),
+        width: mmToInches(niche.widthMm), height: mmToInches(niche.heightMm), depth: mmToInches(niche.depthMm),
+        shelves: (niche.shelves || []).map((shelf) => ({
+          id: shelf.id, fromBottom: mmToInches(shelf.fromBottomMm), thickness: mmToInches(shelf.thicknessMm),
+        })),
+      })),
       suiteContext: {
         organizationId: parsed.value.project.organizationId,
         buildrProjectId: parsed.value.project.buildrProjectId || null,
@@ -338,3 +361,4 @@ export function downloadSuite(envelope: SuiteEnvelope, name: string) {
   link.click();
   URL.revokeObjectURL(url);
 }
+

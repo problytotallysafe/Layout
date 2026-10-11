@@ -83,6 +83,34 @@ test("wall tile surfaces round-trip through the shared suite envelope", () => {
   assert.equal((exported.project.rooms[0].extensions?.layout as { surface?: string }).surface, "wall");
 });
 
+test("three shower wall layouts keep niche shelves and the Buildr job link through save and reopen", () => {
+  const wall = suiteToLayout(createSuiteEnvelope({
+    ...project,
+    buildrProjectId: "job_shower_1",
+    rooms: [{
+      id: "wall_back", name: "Shower back wall", displayUnit: "ft-in", origin: { x: 0, y: 0 },
+      entities: [{ id: "boundary_back", kind: "room.boundary", geometry: {
+        vertices: [{ x: 0, y: 0 }, { x: 1524, y: 0 }, { x: 1524, y: 2438.4 }, { x: 0, y: 2438.4 }],
+      } }],
+      extensions: { layout: { surface: "wall" } },
+    }],
+  }, "floorplan", "1.0.0")).layout;
+  assert.ok(wall);
+  wall.pattern = "third";
+  wall.referenceLine = "42 in from finished floor";
+  wall.niches = [{
+    id: "niche_1", x: 18, y: 32, width: 24, height: 16, depth: 3.5,
+    shelves: [{ id: "shelf_1", fromBottom: 5, thickness: .5 },
+      { id: "shelf_2", fromBottom: 10, thickness: .5 }],
+  }];
+  const reopened = suiteToLayout(layoutToSuite(wall)).layout;
+  assert.ok(reopened);
+  assert.equal(reopened.suiteContext?.buildrProjectId, "job_shower_1");
+  assert.equal(reopened.pattern, "third");
+  assert.equal(reopened.referenceLine, wall.referenceLine);
+  assert.deepEqual(reopened.niches, wall.niches);
+});
+
 test("newer shared records open safely read-only", () => {
   const envelope = createSuiteEnvelope(project, "floorplan", "2.0.0");
   envelope.schemaVersion = "2.0.0";
@@ -118,3 +146,4 @@ test("malformed drawing items are rejected before Layout conversion", () => {
   (envelope.project.rooms[0].entities[0] as unknown as { geometry: unknown }).geometry = null;
   assert.equal(parseSuiteProject(envelope).ok, false);
 });
+

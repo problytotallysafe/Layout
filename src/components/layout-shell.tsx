@@ -73,6 +73,10 @@ function signature(layout: SavedLayout) {
     origin: layout.origin,
     rotation: layout.rotation,
     showTile: layout.showTile,
+    niches: layout.niches || [],
+    pattern: layout.pattern || "stack",
+    method: layout.method || "edge",
+    referenceLine: layout.referenceLine || "",
     archivedAt: layout.archivedAt,
   });
   let hash = 2166136261;
@@ -459,3 +463,4 @@ export function LayoutShell() {
     </>
   );
 }
+

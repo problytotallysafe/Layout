@@ -14,7 +14,10 @@ import { SuiteAccountButton } from "@/components/suite-account";
 
 export type Point = { x: number; y: number };
 export type DrawItem = { id: string; type: "wall" | "opening"; start: Point; end: Point; thickness: number };
+export type Niche = { id: string; x: number; y: number; width: number; height: number; depth: number; shelves: { id: string; fromBottom: number; thickness: number }[] };
 export type LayoutSurface = "floor" | "wall";
+type TilePattern = "stack" | "half" | "third" | "diagonal" | "herringbone";
+type LayoutMethod = "center" | "edge" | "balanced";
 type Tool = "select" | "pan" | "floor" | "room" | "wall" | "opening";
 type MaterialUnit = "in" | "mm" | "cm";
 type TileAppearance = "transparent" | "porcelain" | "stone" | "marble" | "concrete";
@@ -25,22 +28,20 @@ type DragState =
   | { kind: "item"; id: string; anchor: Point; originalStart: Point; originalEnd: Point }
   | { kind: "pan"; clientX: number; clientY: number; origin: Point }
   | { kind: "tile"; anchor: Point; originalOrigin: Point }
+  | { kind: "niche"; id: string; anchor: Point; original: Niche }
+  | { kind: "niche-resize"; id: string; anchor: Point; original: Niche }
+  | { kind: "shelf"; nicheId: string; shelfId: string; anchor: Point; original: number }
   | null;
-type Snapshot = { room: Point[]; items: DrawItem[] };
+type Snapshot = {
+  room: Point[]; items: DrawItem[]; niches?: Niche[]; surface: LayoutSurface;
+  tileWidth: number; tileHeight: number; grout: number; materialUnit: MaterialUnit;
+  tileAppearance: TileAppearance; wastePercent: number; wallThickness: number;
+  origin: Point; rotation: 0 | 90; showTile: boolean; pattern?: TilePattern;
+  method?: LayoutMethod; referenceLine?: string;
+};
 type PinchState = { distance: number; zoom: number; canvasCenter: Point };
 export type LayoutData = Snapshot & {
   projectName: string;
-  surface: LayoutSurface;
-  tileWidth: number;
-  tileHeight: number;
-  grout: number;
-  materialUnit: MaterialUnit;
-  tileAppearance: TileAppearance;
-  wastePercent: number;
-  wallThickness: number;
-  origin: Point;
-  rotation: 0 | 90;
-  showTile: boolean;
   archivedAt?: number;
   suiteContext?: { organizationId: string | null; buildrProjectId: string | null; importKey: string };
 };
@@ -74,6 +75,10 @@ const blankLayout = (id = uid(), projectName = "Untitled layout"): SavedLayout =
   origin: { x: 0, y: 0 },
   rotation: 0,
   showTile: true,
+  niches: [],
+  pattern: "stack",
+  method: "edge",
+  referenceLine: "",
 });
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const distance = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
@@ -88,8 +93,14 @@ const formatLength = (inches: number) => {
   return `${feet}′ ${wholeInches}${fractionLabel}″`;
 };
 const parseLength = (value: string) => {
+  const metric = value.trim().toLowerCase().match(/^(-?\d+(?:\.\d+)?)\s*(mm|cm|m)$/);
+  if (metric) return Number(metric[1]) / ({ mm: 25.4, cm: 2.54, m: 0.0254 }[metric[2] as "mm" | "cm" | "m"]);
   const normalized = value.trim().toLowerCase().replace(/feet|foot|ft/g, "'").replace(/inches|inch|in/g, '"');
   if (!normalized) return null;
+  const mixed = normalized.match(/^(-?\d+)\s+(\d+)\/(\d+)\s*"?$/);
+  if (mixed) return Number(mixed[1]) + Number(mixed[2]) / Number(mixed[3]);
+  const fraction = normalized.match(/^(-?\d+)\/(\d+)\s*"?$/);
+  if (fraction) return Number(fraction[1]) / Number(fraction[2]);
   if (!normalized.includes("'") && !normalized.includes('"')) {
     const plain = Number(normalized);
     return Number.isFinite(plain) ? plain : null;
@@ -103,7 +114,7 @@ const parseLength = (value: string) => {
   if (inchMatch?.[2] && inchMatch[3]) inches += Number(inchMatch[2]) / Number(inchMatch[3]);
   else if (!inchMatch && fractionOnly) inches += Number(fractionOnly[1]) / Number(fractionOnly[2]);
   const result = feet * 12 + inches;
-  return Number.isFinite(result) ? result : null;
+  return Number.isFinite(result) && (!inchMatch?.[3] || Number(inchMatch[3]) !== 0) ? result : null;
 };
 const displayUnit = (inches: number, unit: MaterialUnit) => unit === "in" ? inches : unit === "mm" ? inches * 25.4 : inches * 2.54;
 const inchesFromUnit = (value: number, unit: MaterialUnit) => unit === "in" ? value : unit === "mm" ? value / 25.4 : value / 2.54;
@@ -159,6 +170,28 @@ const isRectangle = (room: Point[]) => room.length === 4 && room.every((point, i
   const next = room[(index + 1) % room.length];
   return point.x === next.x || point.y === next.y;
 });
+const overlaps = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) =>
+  a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+function nicheError(niche: Niche, room: Point[], items: DrawItem[], others: Niche[]) {
+  if (niche.width < 2 || niche.height < 2 || niche.depth <= 0) return "Niche width and height must be at least 2 inches, and depth must be positive.";
+  if (![{ x: niche.x, y: niche.y }, { x: niche.x + niche.width, y: niche.y },
+    { x: niche.x, y: niche.y + niche.height }, { x: niche.x + niche.width, y: niche.y + niche.height }]
+    .some((point) => !pointInPolygon(point, room))) {
+    if (others.some((other) => other.id !== niche.id && overlaps(niche, other))) return "This niche overlaps another niche.";
+    if (items.some((item) => item.type === "opening" && overlaps(niche, {
+      x: Math.min(item.start.x, item.end.x) - 1, y: Math.min(item.start.y, item.end.y) - 1,
+      width: Math.abs(item.start.x - item.end.x) + 2, height: Math.abs(item.start.y - item.end.y) + 2,
+    }))) return "This niche crosses an opening. Move or resize it first.";
+    if (niche.shelves.some((shelf) => shelf.fromBottom < 0 || shelf.fromBottom + shelf.thickness > niche.height))
+      return "A shelf would be outside the resized niche. Move the shelf first.";
+    if (niche.shelves.some((shelf, index) => niche.shelves.some((other, otherIndex) =>
+      otherIndex !== index && shelf.fromBottom < other.fromBottom + other.thickness
+      && shelf.fromBottom + shelf.thickness > other.fromBottom)))
+      return "Shelves cannot overlap. Move one shelf before entering this position.";
+    return null;
+  }
+  return "The niche must fit inside the finished wall face.";
+}
 
 
 const pointOnSegment = (point: Point, start: Point, end: Point, tolerance = 0.05) => {
@@ -280,11 +313,18 @@ function assessAxis(span: number, tile: number, grout: number, rawOffset: number
   return { ...edges, minimum: Math.min(edges.left, edges.right, ...obstacleCuts) };
 }
 
-function balancedOffset(span: number, tile: number, grout: number, obstacles: CutObstacle[]) {
+function assessPatternX(span: number, tile: number, grout: number, rawOffset: number, obstacles: CutObstacle[], pattern: TilePattern) {
+  const rows = pattern === "half" ? 2 : pattern === "third" ? 3 : 1;
+  const assessments = Array.from({ length: rows }, (_, row) => assessAxis(span, tile, grout, rawOffset + row * (tile + grout) / rows, obstacles));
+  return { left: Math.min(...assessments.map((value) => value.left)),
+    right: Math.min(...assessments.map((value) => value.right)),
+    minimum: Math.min(...assessments.map((value) => value.minimum)) };
+}
+function balancedOffset(span: number, tile: number, grout: number, obstacles: CutObstacle[], pattern: TilePattern = "stack") {
   const pitch = tile + grout;
   let best = { offset: 0, score: -Infinity, left: 0, right: 0, minimum: 0 };
   for (let offset = -pitch; offset <= 0; offset += 0.125) {
-    const assessment = assessAxis(span, tile, grout, offset, obstacles);
+    const assessment = assessPatternX(span, tile, grout, offset, obstacles, pattern);
     const score = assessment.minimum * 100 - Math.abs(assessment.left - assessment.right);
     if (score > best.score) best = { offset, score, ...assessment };
   }
@@ -345,11 +385,14 @@ function OffsetField({ inches, label, onCommit }: { inches: number; label: strin
   );
 }
 
-function WallOffsetLabel({ x, y, inches, side }: { x: number; y: number; inches: number; side: "left" | "right" | "top" | "bottom" }) {
+function DimensionBubble({ x, y, inches, label, onClick, width = 34 }: { x: number; y: number; inches: number; label: string; onClick: () => void; width?: number }) {
   return (
-    <g className="wall-offset-label" transform={`translate(${x} ${y})`}>
-      <rect x="-17" y="-3.4" width="34" height="6.8" rx="2" />
-      <text y="1.25">{formatLength(inches)} from {side}</text>
+    <g className="wall-offset-label dimension-bubble" transform={`translate(${x} ${y})`} role="button" tabIndex={0}
+      onPointerDown={(event) => event.stopPropagation()}
+      aria-label={`Edit ${label}: ${formatLength(inches)}`} onClick={(event) => { event.stopPropagation(); onClick(); }}
+      onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onClick(); } }}>
+      <rect x={-width / 2} y="-4.2" width={width} height="8.4" rx="2" />
+      <text y="1.25">{formatLength(inches)} {label}</text>
     </g>
   );
 }
@@ -385,6 +428,15 @@ export function LayoutPlanner() {
   const [origin, setOrigin] = useState<Point>({ x: 0, y: 0 });
   const [rotation, setRotation] = useState<0 | 90>(0);
   const [showTile, setShowTile] = useState(true);
+  const [niches, setNiches] = useState<Niche[]>([]);
+  const [selectedNicheId, setSelectedNicheId] = useState<string | null>(null);
+  const [pattern, setPattern] = useState<TilePattern>("stack");
+  const [method, setMethod] = useState<LayoutMethod>("edge");
+  const [referenceLine, setReferenceLine] = useState("");
+  const [snapNiche, setSnapNiche] = useState(true);
+  const [dimensionEdit, setDimensionEdit] = useState<{ label: string; value: number; commit: (value: number) => string | void } | null>(null);
+  const [dimensionInput, setDimensionInput] = useState("");
+  const [dimensionError, setDimensionError] = useState("");
   const [suiteContext, setSuiteContext] = useState<LayoutData["suiteContext"]>();
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
@@ -468,20 +520,36 @@ export function LayoutPlanner() {
       yObstacles: nextY.filter(({ coordinate }) => coordinate > 0 && coordinate < roomHeight),
     };
   }, [items, bounds.minX, bounds.minY, roomWidth, roomHeight]);
-  const xCuts = useMemo(() => balancedOffset(roomWidth, actualTileW, grout, xObstacles), [roomWidth, actualTileW, grout, xObstacles]);
+  const xCuts = useMemo(() => balancedOffset(roomWidth, actualTileW, grout, xObstacles, pattern), [roomWidth, actualTileW, grout, xObstacles, pattern]);
   const yCuts = useMemo(() => balancedOffset(roomHeight, actualTileH, grout, yObstacles), [roomHeight, actualTileH, grout, yObstacles]);
-  const currentXCuts = useMemo(() => assessAxis(roomWidth, actualTileW, grout, origin.x, xObstacles), [roomWidth, actualTileW, grout, origin.x, xObstacles]);
+  const currentXCuts = useMemo(() => assessPatternX(roomWidth, actualTileW, grout, origin.x, xObstacles, pattern), [roomWidth, actualTileW, grout, origin.x, xObstacles, pattern]);
   const currentYCuts = useMemo(() => assessAxis(roomHeight, actualTileH, grout, origin.y, yObstacles), [roomHeight, actualTileH, grout, origin.y, yObstacles]);
   const selected = items.find((item) => item.id === selectedId) ?? null;
+  const selectedNiche = niches.find((niche) => niche.id === selectedNicheId) ?? null;
   const dimensionedWall = tool === "select" && selected?.type === "wall" ? selected : null;
   const minimumCut = Math.min(currentXCuts.minimum, currentYCuts.minimum);
+  const estimatedCuts = pattern === "diagonal" || pattern === "herringbone";
   const cutWarning = minimumCut < Math.min(actualTileW, actualTileH) / 2;
 
+  const currentSnapshot = useCallback((): Snapshot => ({
+    room, items, niches, surface, tileWidth, tileHeight, grout, materialUnit, tileAppearance,
+    wastePercent, wallThickness, origin, rotation, showTile, pattern, method, referenceLine,
+  }), [room, items, niches, surface, tileWidth, tileHeight, grout, materialUnit, tileAppearance,
+    wastePercent, wallThickness, origin, rotation, showTile, pattern, method, referenceLine]);
   const snapshot = useCallback(() => {
-    setHistory((current) => [...current.slice(-29), { room, items }]);
+    setHistory((current) => [...current.slice(-49), currentSnapshot()]);
     setFuture([]);
     setSaved(false);
-  }, [room, items]);
+  }, [currentSnapshot]);
+  const restoreSnapshot = (state: Snapshot) => {
+    setRoom(state.room); setItems(state.items); setNiches(state.niches || []);
+    setSurface(state.surface); setTileWidth(state.tileWidth); setTileHeight(state.tileHeight);
+    setGrout(state.grout); setMaterialUnit(state.materialUnit); setTileAppearance(state.tileAppearance);
+    setWastePercent(state.wastePercent); setWallThickness(state.wallThickness); setOrigin(state.origin);
+    setRotation(state.rotation); setShowTile(state.showTile); setPattern(state.pattern || "stack");
+    setMethod(state.method || "edge"); setReferenceLine(state.referenceLine || "");
+    setSaved(false);
+  };
 
   const applyLayout = useCallback((layout: SavedLayout) => {
     const restoredBounds = roomBounds(layout.room);
@@ -499,8 +567,13 @@ export function LayoutPlanner() {
     setOrigin(layout.origin);
     setRotation(layout.rotation);
     setShowTile(layout.showTile);
+    setNiches(layout.niches || []);
+    setPattern(layout.pattern || "stack");
+    setMethod(layout.method || "edge");
+    setReferenceLine(layout.referenceLine || "");
     setSuiteContext(layout.suiteContext);
     setSelectedId(null);
+    setSelectedNicheId(null);
     setDraftRoom([]);
     setTool("select");
     setZoom(1);
@@ -537,6 +610,7 @@ export function LayoutPlanner() {
       origin,
       rotation,
       showTile,
+      niches, pattern, method, referenceLine,
       suiteContext,
     };
     const existingIndex = savedLayoutsRef.current.findIndex((layout) => layout.id === activeLayoutId);
@@ -547,7 +621,7 @@ export function LayoutPlanner() {
     window.localStorage.setItem(LEGACY_DRAFT_KEY, JSON.stringify(document));
     setSaved(true);
     return document;
-  }, [activeLayoutId, grout, items, materialUnit, origin, persistLibrary, projectName, room, rotation, showTile, suiteContext, surface, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
+  }, [activeLayoutId, grout, items, niches, pattern, method, referenceLine, materialUnit, origin, persistLibrary, projectName, room, rotation, showTile, suiteContext, surface, tileAppearance, tileHeight, tileWidth, wallThickness, wastePercent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -706,6 +780,7 @@ export function LayoutPlanner() {
       projectName: `${source.projectName} copy`,
       room: source.room.map((point) => ({ ...point })),
       items: source.items.map((item) => ({ ...item, id: uid(), start: { ...item.start }, end: { ...item.end } })),
+      niches: (source.niches || []).map((niche) => ({ ...niche, id: uid(), shelves: niche.shelves.map((shelf) => ({ ...shelf, id: uid() })) })),
       origin: { ...source.origin },
       updatedAt: Date.now(),
     };
@@ -867,6 +942,7 @@ export function LayoutPlanner() {
       return;
     }
     if (tool === "floor") {
+      snapshot();
       event.currentTarget.setPointerCapture(event.pointerId);
       setDrag({ kind: "tile", anchor: point, originalOrigin: origin });
       return;
@@ -896,9 +972,37 @@ export function LayoutPlanner() {
     const point = drag.kind === "draw" && tool === "wall" ? clampWallPoint(rawPoint, wallThickness, bounds) : rawPoint;
     if (drag.kind === "tile") {
       setOrigin({
-        x: drag.originalOrigin.x + point.x - drag.anchor.x,
-        y: drag.originalOrigin.y + point.y - drag.anchor.y,
+        x: clamp(drag.originalOrigin.x + point.x - drag.anchor.x, 0, roomWidth),
+        y: clamp(drag.originalOrigin.y + point.y - drag.anchor.y, 0, roomHeight),
       });
+      return;
+    }
+    if (drag.kind === "niche" || drag.kind === "niche-resize") {
+      const original = drag.original;
+      const dx = point.x - drag.anchor.x, dy = point.y - drag.anchor.y;
+      const snap = (value: number, axis: "x" | "y") => {
+        if (!snapNiche || event.altKey) return Math.round(value * 8) / 8;
+        const pitch = axis === "x" ? actualTileW + grout : actualTileH + grout;
+        const line = axis === "x" ? bounds.minX + origin.x : bounds.minY + origin.y;
+        const grid = line + Math.round((value - line) / pitch) * pitch;
+        return Math.abs(grid - value) < 1.25 ? grid : Math.round(value * 8) / 8;
+      };
+      const candidate = drag.kind === "niche"
+        ? { ...original, x: snap(original.x + dx, "x"), y: snap(original.y + dy, "y") }
+        : { ...original, width: snap(original.x + original.width + dx, "x") - original.x,
+            height: snap(original.y + original.height + dy, "y") - original.y };
+      if (!nicheError(candidate, room, items, niches))
+        setNiches((current) => current.map((niche) => niche.id === original.id ? candidate : niche));
+      return;
+    }
+    if (drag.kind === "shelf") {
+      setNiches((current) => current.map((niche) => {
+        if (niche.id !== drag.nicheId) return niche;
+        const proposed = { ...niche, shelves: niche.shelves.map((shelf) => shelf.id === drag.shelfId
+          ? { ...shelf, fromBottom: clamp(Math.round((drag.original - (point.y - drag.anchor.y)) * 8) / 8, 0, niche.height - shelf.thickness) }
+          : shelf) };
+        return nicheError(proposed, room, items, current) ? niche : proposed;
+      }));
       return;
     }
     if (drag.kind === "draw") {
@@ -991,6 +1095,18 @@ export function LayoutPlanner() {
     svgRef.current?.setPointerCapture(event.pointerId);
     setDrag({ kind: "item", id: item.id, anchor: clientPoint(event.clientX, event.clientY), originalStart: item.start, originalEnd: item.end });
   };
+  const beginNicheDrag = (event: React.PointerEvent<SVGElement>, niche: Niche, kind: "niche" | "niche-resize") => {
+    if (tool !== "select" || pinchRef.current) return;
+    event.stopPropagation(); snapshot(); setSelectedNicheId(niche.id); setSelectedId(null);
+    svgRef.current?.setPointerCapture(event.pointerId);
+    setDrag({ kind, id: niche.id, anchor: clientPoint(event.clientX, event.clientY), original: niche });
+  };
+  const beginShelfDrag = (event: React.PointerEvent<SVGElement>, niche: Niche, shelf: Niche["shelves"][number]) => {
+    if (tool !== "select" || pinchRef.current) return;
+    event.stopPropagation(); snapshot(); setSelectedNicheId(niche.id);
+    svgRef.current?.setPointerCapture(event.pointerId);
+    setDrag({ kind: "shelf", nicheId: niche.id, shelfId: shelf.id, anchor: clientPoint(event.clientX, event.clientY), original: shelf.fromBottom });
+  };
   const finishRoom = () => {
     if (draftRoom.length < 3) return;
     snapshot();
@@ -1000,9 +1116,11 @@ export function LayoutPlanner() {
     setTool("select");
   };
   const cancelRoom = () => { setDraftRoom([]); setTool("select"); };
-  const autoBalance = () => setOrigin({ x: xCuts.offset, y: yCuts.offset });
+  const autoBalance = () => { snapshot(); setOrigin({ x: ((xCuts.offset % (actualTileW + grout)) + actualTileW + grout) % (actualTileW + grout),
+    y: ((yCuts.offset % (actualTileH + grout)) + actualTileH + grout) % (actualTileH + grout) }); setMethod("balanced"); };
   const favorOpening = () => {
     if (!selected || selected.type !== "opening") return;
+    snapshot();
     const horizontal = Math.abs(selected.end.x - selected.start.x) >= Math.abs(selected.end.y - selected.start.y);
     const midpoint = {
       x: (selected.start.x + selected.end.x) / 2,
@@ -1015,6 +1133,7 @@ export function LayoutPlanner() {
 
   const updateSelectedLength = (nextLength: number) => {
     if (!selected || nextLength <= 0) return;
+    snapshot();
     const currentLength = distance(selected.start, selected.end) || 1;
     const scale = nextLength / currentLength;
     setItems((current) => current.map((item) => {
@@ -1025,6 +1144,30 @@ export function LayoutPlanner() {
       };
       return { ...item, end: item.type === "wall" ? clampWallPoint(end, item.thickness, bounds) : end };
     }));
+  };
+  const updateItemLength = (id: string, value: number): string | void => {
+    const item = items.find((candidate) => candidate.id === id);
+    if (!item || value < 1) return "Enter a length of at least 1 inch.";
+    const oldLength = distance(item.start, item.end);
+    if (!oldLength) return "Move the endpoint before entering its length.";
+    const end = { x: item.start.x + (item.end.x - item.start.x) * value / oldLength,
+      y: item.start.y + (item.end.y - item.start.y) * value / oldLength };
+    const candidate = { ...item, end };
+    if (!itemInsideRoom(candidate, room)) return "The new endpoint is outside the surface. Move the first end or change the room first.";
+    snapshot(); setItems((current) => current.map((drawn) => drawn.id === id ? candidate : drawn));
+  };
+  const editItemOffset = (id: string, side: "left" | "right" | "top" | "bottom", value: number): string | void => {
+    const item = items.find((candidate) => candidate.id === id);
+    if (!item) return "Select the feature first.";
+    const minX = Math.min(item.start.x, item.end.x), maxX = Math.max(item.start.x, item.end.x);
+    const minY = Math.min(item.start.y, item.end.y), maxY = Math.max(item.start.y, item.end.y);
+    const delta = side === "left" ? { x: bounds.minX + value - minX, y: 0 }
+      : side === "right" ? { x: bounds.maxX - value - maxX, y: 0 }
+      : side === "top" ? { x: 0, y: bounds.minY + value - minY }
+      : { x: 0, y: bounds.maxY - value - maxY };
+    const moved = translateItem(item, delta.x, delta.y);
+    if (!itemInsideRoom(moved, room)) return "This offset moves the feature outside the finished surface. Adjust the adjacent edge first.";
+    snapshot(); setItems((current) => current.map((candidate) => candidate.id === id ? moved : candidate));
   };
   const resizeRectangle = (axis: "width" | "height", value: number) => {
     if (!isRectangle(room) || value < 24) return;
@@ -1038,15 +1181,83 @@ export function LayoutPlanner() {
     setRoom(nextRoom);
     setItems((current) => current.map((item) => constrainWallToBounds(item, nextBounds)));
   };
+  const editSegment = (index: number, value: number): string | void => {
+    if (value < 2) return "A wall segment must be at least 2 inches.";
+    const start = room[index], end = room[(index + 1) % room.length];
+    const length = distance(start, end);
+    if (isRectangle(room)) {
+      if (value < 24) return "The overall surface must be at least 24 inches.";
+      resizeRectangle(Math.abs(end.x - start.x) > Math.abs(end.y - start.y) ? "width" : "height", value);
+      return;
+    }
+    const next = room.map((point) => ({ ...point }));
+    next[(index + 1) % room.length] = { x: start.x + (end.x - start.x) / length * value, y: start.y + (end.y - start.y) / length * value };
+    if (next.some((point) => point.x < 0 || point.x > VIEW_W || point.y < 0 || point.y > VIEW_H))
+      return "The new point is outside the drawing. Adjust the room or the adjoining segment first.";
+    if (polygonArea(next) < 24) return "That value collapses the surface.";
+    snapshot(); setRoom(next);
+  };
+  const editNiche = (id: string, changes: Partial<Niche>): string | void => {
+    const existing = niches.find((niche) => niche.id === id);
+    if (!existing) return "Select a niche first.";
+    const next = { ...existing, ...changes };
+    const error = nicheError(next, room, items, niches);
+    if (error) return error;
+    snapshot(); setNiches((current) => current.map((niche) => niche.id === id ? next : niche));
+  };
+  const addNiche = () => {
+    const width = Math.min(24, roomWidth - 4), height = Math.min(16, roomHeight - 4);
+    const niche: Niche = { id: uid(), x: bounds.minX + (roomWidth - width) / 2, y: bounds.minY + (roomHeight - height) / 2,
+      width, height, depth: 3.5, shelves: [] };
+    const error = nicheError(niche, room, items, niches);
+    if (error) { setDimensionError(error); return; }
+    snapshot(); setNiches((current) => [...current, niche]); setSelectedNicheId(niche.id); setSelectedId(null); setTool("select");
+  };
+  const updateShelf = (niche: Niche, id: string, changes: Partial<Niche["shelves"][number]>): string | void => {
+    const shelves = niche.shelves.map((shelf) => shelf.id === id ? { ...shelf, ...changes } : shelf);
+    if (shelves.some((shelf) => shelf.thickness <= 0)) return "Shelf thickness must be greater than zero.";
+    const error = nicheError({ ...niche, shelves }, room, items, niches);
+    if (error) return error;
+    snapshot(); setNiches((current) => current.map((item) => item.id === niche.id ? { ...item, shelves } : item));
+  };
+  const chooseMethod = (next: LayoutMethod) => {
+    snapshot(); setMethod(next);
+    if (next === "balanced") setOrigin({ x: ((xCuts.offset % (actualTileW + grout)) + actualTileW + grout) % (actualTileW + grout),
+      y: ((yCuts.offset % (actualTileH + grout)) + actualTileH + grout) % (actualTileH + grout) });
+    if (next === "center") setOrigin({ x: (roomWidth - actualTileW) / 2, y: (roomHeight - actualTileH) / 2 });
+    if (next === "edge") setOrigin({ x: 0, y: 0 });
+  };
   const undo = () => {
     const previous = history.at(-1); if (!previous) return;
-    setFuture((current) => [{ room, items }, ...current]); setHistory((current) => current.slice(0, -1));
-    setRoom(previous.room); setItems(previous.items); setSelectedId(null);
+    setFuture((current) => [currentSnapshot(), ...current]); setHistory((current) => current.slice(0, -1));
+    restoreSnapshot(previous); setSelectedId(null);
   };
   const redo = () => {
     const next = future[0]; if (!next) return;
-    setHistory((current) => [...current, { room, items }]); setFuture((current) => current.slice(1));
-    setRoom(next.room); setItems(next.items); setSelectedId(null);
+    setHistory((current) => [...current, currentSnapshot()]); setFuture((current) => current.slice(1));
+    restoreSnapshot(next); setSelectedId(null);
+  };
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.closest("input, textarea, [contenteditable=true]") || !(event.metaKey || event.ctrlKey)) return;
+      if (event.key.toLowerCase() !== "z" && event.key.toLowerCase() !== "y") return;
+      event.preventDefault();
+      if (event.key.toLowerCase() === "y" || event.shiftKey) redo(); else undo();
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  });
+  const openDimension = (label: string, value: number, commit: (value: number) => string | void) => {
+    setDimensionEdit({ label, value, commit }); setDimensionInput(formatLength(value)); setDimensionError("");
+  };
+  const confirmDimension = () => {
+    if (!dimensionEdit) return;
+    const value = parseLength(dimensionInput);
+    if (value === null || !Number.isFinite(value) || value < 0) { setDimensionError("Enter a valid positive length, for example 5' 3 1/2\" or 1350 mm."); return; }
+    const error = dimensionEdit.commit(value);
+    if (error) { setDimensionError(error); return; }
+    setDimensionEdit(null);
   };
 
   const roomPath = room.map((point) => `${point.x},${point.y}`).join(" ");
@@ -1056,8 +1267,8 @@ export function LayoutPlanner() {
   const patternY = bounds.minY + origin.y;
   const pitchX = actualTileW + grout;
   const pitchY = actualTileH + grout;
-  const startX = patternX + Math.floor(((bounds.minX + bounds.maxX) / 2 - patternX) / pitchX) * pitchX;
-  const startY = patternY + Math.floor(((bounds.minY + bounds.maxY) / 2 - patternY) / pitchY) * pitchY;
+  const startX = bounds.minX + origin.x;
+  const startY = bounds.minY + origin.y;
   const startLeftReference = Math.max(0, startX - bounds.minX);
   const startRightReference = Math.max(0, bounds.maxX - startX);
   const startTopReference = Math.max(0, startY - bounds.minY);
@@ -1078,10 +1289,12 @@ export function LayoutPlanner() {
   const guideRightFace = guideWallMidpoint ? guideWallMidpoint.x + guideHalfThickness : 0;
   const guideTopFace = guideWallMidpoint ? guideWallMidpoint.y - guideHalfThickness : 0;
   const guideBottomFace = guideWallMidpoint ? guideWallMidpoint.y + guideHalfThickness : 0;
-  const setWallOffset = (side: "left" | "right" | "top" | "bottom", value: number) => {
+  const setWallOffset = (side: "left" | "right" | "top" | "bottom", value: number): string | void => {
     if (!dimensionedWall || !guideWallMidpoint) return;
-    snapshot();
     const halfThickness = dimensionedWall.thickness / 2;
+    if (value > (side === "left" || side === "right" ? roomWidth : roomHeight) - dimensionedWall.thickness)
+      return "This offset exceeds the space between the finished faces. Adjust the wall or opposite edge first.";
+    snapshot();
     if (side === "left" || side === "right") {
       const rawTarget = side === "left" ? bounds.minX + value + halfThickness : bounds.maxX - value - halfThickness;
       const target = clamp(rawTarget, bounds.minX + halfThickness, bounds.maxX - halfThickness);
@@ -1101,6 +1314,14 @@ export function LayoutPlanner() {
         end: { ...item.end, y: item.end.y + delta },
       } : item));
     }
+  };
+  const editStart = (side: "left" | "right" | "top" | "bottom", value: number): string | void => {
+    const horizontal = side === "left" || side === "right";
+    const span = horizontal ? roomWidth : roomHeight;
+    if (value > span) return `The start line must fall within the ${surfaceNameLower} (${formatLength(span)}).`;
+    const offset = side === "left" || side === "top" ? value : span - value;
+    snapshot();
+    setOrigin((current) => horizontal ? { ...current, x: offset } : { ...current, y: offset });
   };
   const tileFill = {
     transparent: "#d4b477",
@@ -1157,6 +1378,17 @@ export function LayoutPlanner() {
           </div>
         </section>
       </div>}
+      {dimensionEdit && <div className="dimension-backdrop" onPointerDown={() => setDimensionEdit(null)}>
+        <form className="dimension-dialog" role="dialog" aria-modal="true" aria-labelledby="dimension-title" onPointerDown={(event) => event.stopPropagation()}
+          onSubmit={(event) => { event.preventDefault(); confirmDimension(); }}>
+          <span className="eyebrow">Exact measurement</span>
+          <h2 id="dimension-title">{dimensionEdit.label}</h2>
+          <p>Current: {formatLength(dimensionEdit.value)}. Enter inches, feet and inches, a fraction, mm, cm, or m.</p>
+          <input autoFocus aria-label={dimensionEdit.label} value={dimensionInput} onChange={(event) => { setDimensionInput(event.target.value); setDimensionError(""); }} />
+          {dimensionError && <p className="edit-error" role="alert">{dimensionError}</p>}
+          <div className="button-row"><button type="button" className="secondary" onClick={() => setDimensionEdit(null)}>Cancel</button><button type="submit" className="primary">Apply dimension</button></div>
+        </form>
+      </div>}
 
       {libraryOpen && <div className="library-backdrop" role="presentation" onPointerDown={() => setLibraryOpen(false)}>
         <section className="layout-library" role="dialog" aria-modal="true" aria-labelledby="layout-library-title" onPointerDown={(event) => event.stopPropagation()}>
@@ -1209,6 +1441,10 @@ export function LayoutPlanner() {
               <span>{{ select: "Drag a selected feature to move it, or drag either end to resize it.", pan: "Drag the work area after zooming in.", floor: `Grab the ${surfaceNameLower} tile field and move the entire layout.`, wall: surface === "wall" ? "Use feature lines for ledges, borders, or other cut references." : "Walls snap straight. Hold Alt only when you need an angle.", opening: "Openings snap straight along the nearest boundary.", room: surface === "wall" ? "Tap each corner of the tiled wall area, then finish the surface." : "Tap each corner, then finish the room." }[tool]}</span>
             </div>
             {tool === "room" && <div className="draft-actions"><button className="text-button" onClick={cancelRoom}>Cancel</button><button className="primary small" disabled={draftRoom.length < 3} onClick={finishRoom}>Finish {surface === "wall" ? "surface" : "room"}</button></div>}
+            <div className="history-controls" aria-label="Edit history">
+              <button onClick={undo} disabled={!history.length} aria-label="Undo" title="Undo"><Undo2 size={16} /> Undo</button>
+              <button onClick={redo} disabled={!future.length} aria-label="Redo" title="Redo"><Redo2 size={16} /> Redo</button>
+            </div>
             <div className="zoom-controls">
               <button onClick={() => changeZoom(zoom - 0.2)} aria-label="Zoom out"><ZoomOut size={17} /></button>
               <span>{Math.round(zoom * 100)}%</span>
@@ -1223,7 +1459,7 @@ export function LayoutPlanner() {
               onPointerUpCapture={endPointerTracking} onPointerCancelCapture={endPointerTracking}
               onPointerDown={startDrawing} onPointerMove={movePointer} onPointerUp={endPointer} onPointerCancel={endPointer}
               onWheel={(event) => { event.preventDefault(); changeZoom(zoom * (event.deltaY > 0 ? .9 : 1.1)); }}
-              role="img" aria-label={`Editable ${surfaceNameLower} tile layout`}>
+              role="group" aria-label={`Editable ${surfaceNameLower} tile layout`}>
               <defs>
                 <pattern id="minor-grid" width="3" height="3" patternUnits="userSpaceOnUse"><path d="M 3 0 L 0 0 0 3" fill="none" stroke="#d9dfdb" strokeWidth=".25" /></pattern>
                 <pattern id="major-grid" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="12" height="12" fill="url(#minor-grid)" /><path d="M 12 0 L 0 0 0 12" fill="none" stroke="#b9c4bd" strokeWidth=".45" /></pattern>
@@ -1240,70 +1476,120 @@ export function LayoutPlanner() {
                 <pattern id="tile-pattern" x={patternX} y={patternY} width={actualTileW + grout} height={actualTileH + grout} patternUnits="userSpaceOnUse">
                   <rect width={actualTileW} height={actualTileH} rx=".45" fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
                 </pattern>
+                <pattern id="running-pattern" x={patternX} y={patternY} width={actualTileW + grout} height={(actualTileH + grout) * (pattern === "third" ? 3 : 2)} patternUnits="userSpaceOnUse">
+                  {Array.from({ length: pattern === "third" ? 3 : 2 }, (_, row) => {
+                    const shift = row * (actualTileW + grout) / (pattern === "third" ? 3 : 2);
+                    return [-1, 0, 1].map((column) => <rect key={`${row}-${column}`} x={column * (actualTileW + grout) + shift} y={row * (actualTileH + grout)}
+                      width={actualTileW} height={actualTileH} fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />);
+                  })}
+                </pattern>
+                <pattern id="diagonal-pattern" x={patternX} y={patternY} width={actualTileW + grout} height={actualTileH + grout}
+                  patternUnits="userSpaceOnUse" patternTransform={`rotate(45 ${patternX} ${patternY})`}>
+                  <rect width={actualTileW} height={actualTileH} fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
+                </pattern>
+                <pattern id="herringbone-pattern" x={patternX} y={patternY} width={2 * (actualTileW + grout)} height={2 * (actualTileW + grout)} patternUnits="userSpaceOnUse">
+                  {[0, 1, 2, 3].map((row) => <g key={row} transform={`translate(${(row % 2) * (actualTileW + grout)} ${row * (actualTileW + grout) / 2})`}>
+                    <rect width={actualTileW} height={actualTileH} fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
+                    <rect x={actualTileW + grout} width={actualTileH} height={actualTileW} fill={tileFill} fillOpacity={tileOpacity} stroke="#9e7a35" strokeWidth=".45" />
+                  </g>)}
+                </pattern>
                 <clipPath id="room-clip"><polygon points={roomPath} /></clipPath>
+                <mask id="field-mask" maskUnits="userSpaceOnUse" x="0" y="0" width={VIEW_W} height={VIEW_H}>
+                  <polygon points={roomPath} fill="white" />
+                  {niches.map((niche) => <rect key={niche.id} x={niche.x} y={niche.y} width={niche.width} height={niche.height} fill="black" />)}
+                </mask>
               </defs>
               <rect width="100%" height="100%" fill="url(#major-grid)" />
               <polygon points={roomPath} fill="#fff" stroke="#173f32" strokeWidth="2.25" strokeLinejoin="round" />
-              {showTile && <rect x={bounds.minX - actualTileW} y={bounds.minY - actualTileH} width={roomWidth + actualTileW * 2} height={roomHeight + actualTileH * 2} fill="url(#tile-pattern)" clipPath="url(#room-clip)" />}
+              {showTile && <rect x={bounds.minX - actualTileW * 2} y={bounds.minY - actualTileH * 2} width={roomWidth + actualTileW * 4} height={roomHeight + actualTileH * 4}
+                fill={`url(#${pattern === "stack" ? "tile-pattern" : pattern === "half" || pattern === "third" ? "running-pattern" : pattern === "diagonal" ? "diagonal-pattern" : "herringbone-pattern"})`}
+                mask="url(#field-mask)" />}
+              {surface === "wall" && niches.map((niche) => <g key={niche.id} className={`niche-drawing ${selectedNicheId === niche.id ? "selected" : ""}`}>
+                <rect className="niche-back" x={niche.x} y={niche.y} width={niche.width} height={niche.height}
+                  onPointerDown={(event) => beginNicheDrag(event, niche, "niche")} />
+                <rect className="niche-back-tile" x={niche.x + 1} y={niche.y + 1} width={niche.width - 2} height={niche.height - 2}
+                  fill={showTile ? "url(#tile-pattern)" : "none"} pointerEvents="none" />
+                <path className="niche-returns" d={`M${niche.x} ${niche.y}l2 2h${niche.width - 4}l2 -2M${niche.x} ${niche.y + niche.height}l2 -2h${niche.width - 4}l2 2`} pointerEvents="none" />
+                {niche.shelves.map((shelf) => {
+                  const y = niche.y + niche.height - shelf.fromBottom - shelf.thickness;
+                  return <g key={shelf.id}>
+                    <rect className="niche-shelf" x={niche.x + 1} y={y} width={niche.width - 2} height={shelf.thickness}
+                      onPointerDown={(event) => beginShelfDrag(event, niche, shelf)} />
+                    {selectedNicheId === niche.id && <DimensionBubble x={niche.x + niche.width / 2} y={y - 2} inches={shelf.fromBottom} width={27}
+                      label="shelf from sill" onClick={() => openDimension("Shelf from niche sill", shelf.fromBottom, (value) => updateShelf(niche, shelf.id, { fromBottom: value }))} />}
+                  </g>;
+                })}
+                {selectedNicheId === niche.id && <>
+                  <DimensionBubble x={niche.x + niche.width / 2} y={niche.y - 5} inches={niche.width} width={27} label="niche width" onClick={() => openDimension("Niche width · left edge fixed", niche.width, (value) => editNiche(niche.id, { width: value }))} />
+                  <DimensionBubble x={niche.x + niche.width + 10} y={niche.y + niche.height / 2} inches={niche.height} width={27} label="niche height" onClick={() => openDimension("Niche height · top edge fixed", niche.height, (value) => editNiche(niche.id, { height: value }))} />
+                  <DimensionBubble x={niche.x + niche.width / 2} y={niche.y + niche.height + 6} inches={bounds.maxY - niche.y - niche.height} width={30} label="from floor" onClick={() => openDimension("Niche sill from finished floor", bounds.maxY - niche.y - niche.height, (value) => editNiche(niche.id, { y: bounds.maxY - value - niche.height }))} />
+                  <DimensionBubble x={niche.x - 12} y={niche.y + niche.height / 2} inches={niche.x - bounds.minX} width={27} label="from left" onClick={() => openDimension("Niche from left inside wall face", niche.x - bounds.minX, (value) => editNiche(niche.id, { x: bounds.minX + value }))} />
+                  <DimensionBubble x={niche.x + niche.width + 11} y={niche.y - 6} inches={bounds.maxX - niche.x - niche.width} width={27} label="from right" onClick={() => openDimension("Niche from right inside wall face", bounds.maxX - niche.x - niche.width, (value) => editNiche(niche.id, { x: bounds.maxX - value - niche.width }))} />
+                  <DimensionBubble x={niche.x - 12} y={niche.y - 6} inches={niche.y - bounds.minY} width={27} label="from top" onClick={() => openDimension("Niche from top of wall", niche.y - bounds.minY, (value) => editNiche(niche.id, { y: bounds.minY + value }))} />
+                  <circle className="niche-handle" cx={niche.x + niche.width} cy={niche.y + niche.height} r="3.4" onPointerDown={(event) => beginNicheDrag(event, niche, "niche-resize")} />
+                </>}
+              </g>)}
               {items.map((item) => { const isSelected = selectedId === item.id; return (
                 <g key={item.id} className={`plan-item ${item.type} ${isSelected ? "selected" : ""}`} onPointerDown={(event) => beginItemDrag(event, item)}>
                   <line x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} strokeWidth={item.type === "wall" ? item.thickness : Math.max(2.25, item.thickness * .55)} />
                   {item.type === "opening" && <line className="opening-center" x1={item.start.x} y1={item.start.y} x2={item.end.x} y2={item.end.y} />}
-                  <text x={(item.start.x + item.end.x) / 2} y={(item.start.y + item.end.y) / 2 - item.thickness / 2 - 2}>{formatLength(distance(item.start, item.end))}</text>
+                  <DimensionBubble x={(item.start.x + item.end.x) / 2} y={(item.start.y + item.end.y) / 2 - item.thickness / 2 - 2}
+                    inches={distance(item.start, item.end)} width={22} label={item.type === "opening" ? "opening width" : "wall length"}
+                    onClick={() => { setSelectedId(item.id); openDimension(item.type === "opening" ? "Opening width · first end fixed" : "Wall length · first end fixed", distance(item.start, item.end), (value) => updateItemLength(item.id, value)); }} />
                   {isSelected && <><circle cx={item.start.x} cy={item.start.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "start")} /><circle cx={item.end.x} cy={item.end.y} r="2.7" onPointerDown={(event) => beginEndpointDrag(event, item.id, "end")} /></>}
                 </g>
               ); })}
-              {showTile && <g className="chalk-guide" clipPath="url(#room-clip)" pointerEvents="none">
+              {selected?.type === "opening" && <g className="opening-dimensions">
+                <DimensionBubble x={(bounds.minX + Math.min(selected.start.x, selected.end.x)) / 2} y={Math.min(selected.start.y, selected.end.y) - 7}
+                  inches={Math.min(selected.start.x, selected.end.x) - bounds.minX} label="from left" onClick={() => openDimension("Opening from left", Math.min(selected.start.x, selected.end.x) - bounds.minX, (value) => editItemOffset(selected.id, "left", value))} />
+                <DimensionBubble x={(bounds.maxX + Math.max(selected.start.x, selected.end.x)) / 2} y={Math.min(selected.start.y, selected.end.y) - 7}
+                  inches={bounds.maxX - Math.max(selected.start.x, selected.end.x)} label="from right" onClick={() => openDimension("Opening from right", bounds.maxX - Math.max(selected.start.x, selected.end.x), (value) => editItemOffset(selected.id, "right", value))} />
+                {surface === "wall" && <DimensionBubble x={Math.max(selected.start.x, selected.end.x) + 12} y={(bounds.maxY + Math.max(selected.start.y, selected.end.y)) / 2}
+                  inches={bounds.maxY - Math.max(selected.start.y, selected.end.y)} label="from floor" onClick={() => openDimension("Opening from finished floor", bounds.maxY - Math.max(selected.start.y, selected.end.y), (value) => editItemOffset(selected.id, "bottom", value))} />}
+              </g>}
+              {showTile && <g className="chalk-guide" clipPath="url(#room-clip)">
                 <line className="chalk-axis" x1={startX} y1={bounds.minY} x2={startX} y2={bounds.maxY} />
                 <line className="chalk-axis" x1={bounds.minX} y1={startY} x2={bounds.maxX} y2={startY} />
                 <circle cx={startX} cy={startY} r="1.8" />
-                <g className="chalk-measure">
-                  <rect x={(bounds.minX + startX) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={(bounds.minX + startX) / 2} y={startY + 1.25}>{formatLength(startLeftReference)} from left</text>
-                </g>
-                <g className="chalk-measure">
-                  <rect x={(startX + bounds.maxX) / 2 - 15} y={startY - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={(startX + bounds.maxX) / 2} y={startY + 1.25}>{formatLength(startRightReference)} from right</text>
-                </g>
-                <g className="chalk-measure">
-                  <rect x={startX - 15} y={(bounds.minY + startY) / 2 - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={startX} y={(bounds.minY + startY) / 2 + 1.25}>{formatLength(startTopReference)} from top</text>
-                </g>
-                <g className="chalk-measure">
-                  <rect x={startX - 15} y={(startY + bounds.maxY) / 2 - 3.4} width="30" height="6.8" rx="2" />
-                  <text x={startX} y={(startY + bounds.maxY) / 2 + 1.25}>{formatLength(startBottomReference)} from bottom</text>
-                </g>
+                <DimensionBubble x={(bounds.minX + startX) / 2} y={startY} inches={startLeftReference} label="from left" onClick={() => openDimension("Start line from left", startLeftReference, (value) => editStart("left", value))} />
+                <DimensionBubble x={(startX + bounds.maxX) / 2} y={startY} inches={startRightReference} label="from right" onClick={() => openDimension("Start line from right", startRightReference, (value) => editStart("right", value))} />
+                <DimensionBubble x={startX} y={(bounds.minY + startY) / 2} inches={startTopReference} label="from top" onClick={() => openDimension("Start line from top", startTopReference, (value) => editStart("top", value))} />
+                <DimensionBubble x={startX} y={(startY + bounds.maxY) / 2} inches={startBottomReference} label="from bottom" onClick={() => openDimension("Start line from bottom", startBottomReference, (value) => editStart("bottom", value))} />
                 <g className="chalk-label" transform={`translate(${startX + 12} ${startY - 7})`}><rect x="-10" y="-3" width="20" height="6" rx="2" /><text y="1">CHALK CROSSING</text></g>
               </g>}
-              <g className="dimensions" pointerEvents="none">
+              <g className="dimensions">
                 {room.map((point, index) => { const next = room[(index + 1) % room.length]; const midpoint = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 }; const labelPoint = outsideDimensionPoint(point, next, roomCenter); return (
-                  <g key={`${point.x}-${point.y}-${index}`}><line x1={midpoint.x} y1={midpoint.y} x2={labelPoint.x} y2={labelPoint.y} /><rect x={labelPoint.x - 9} y={labelPoint.y - 3.4} width="18" height="6.8" rx="2" /><text x={labelPoint.x} y={labelPoint.y + 1.45}>{formatLength(distance(point, next))}</text></g>
+                  <g key={index}><line x1={midpoint.x} y1={midpoint.y} x2={labelPoint.x} y2={labelPoint.y} pointerEvents="none" />
+                    <DimensionBubble x={labelPoint.x} y={labelPoint.y} inches={distance(point, next)} width={22}
+                      label={isRectangle(room) ? (Math.abs(next.x - point.x) > Math.abs(next.y - point.y) ? "width" : "height") : `segment ${index + 1}`}
+                      onClick={() => openDimension(isRectangle(room) ? (Math.abs(next.x - point.x) > Math.abs(next.y - point.y) ? "Overall width · left edge fixed" : "Overall height · top edge fixed") : `Wall segment ${index + 1} · start point fixed`, distance(point, next), (value) => editSegment(index, value))} />
+                  </g>
                 ); })}
               </g>
               {dimensionedWall && guideWallMidpoint && guideWallOrientation === "vertical" && <g className="wall-offset-guides">
                 <line x1={bounds.minX} y1={guideWallMidpoint.y} x2={guideLeftFace} y2={guideWallMidpoint.y} />
                 <line x1={guideRightFace} y1={guideWallMidpoint.y} x2={bounds.maxX} y2={guideWallMidpoint.y} />
-                <WallOffsetLabel x={(bounds.minX + guideLeftFace) / 2} y={guideWallMidpoint.y} inches={guideLeftFace - bounds.minX} side="left" />
-                <WallOffsetLabel x={(guideRightFace + bounds.maxX) / 2} y={guideWallMidpoint.y} inches={bounds.maxX - guideRightFace} side="right" />
+                <DimensionBubble x={(bounds.minX + guideLeftFace) / 2} y={guideWallMidpoint.y} inches={guideLeftFace - bounds.minX} label="from left" onClick={() => openDimension("Wall face from left", guideLeftFace - bounds.minX, (value) => setWallOffset("left", value))} />
+                <DimensionBubble x={(guideRightFace + bounds.maxX) / 2} y={guideWallMidpoint.y} inches={bounds.maxX - guideRightFace} label="from right" onClick={() => openDimension("Wall face from right", bounds.maxX - guideRightFace, (value) => setWallOffset("right", value))} />
               </g>}
               {dimensionedWall && guideWallMidpoint && guideWallOrientation === "horizontal" && <g className="wall-offset-guides">
                 <line x1={guideWallMidpoint.x} y1={bounds.minY} x2={guideWallMidpoint.x} y2={guideTopFace} />
                 <line x1={guideWallMidpoint.x} y1={guideBottomFace} x2={guideWallMidpoint.x} y2={bounds.maxY} />
-                <WallOffsetLabel x={guideWallMidpoint.x} y={(bounds.minY + guideTopFace) / 2} inches={guideTopFace - bounds.minY} side="top" />
-                <WallOffsetLabel x={guideWallMidpoint.x} y={(guideBottomFace + bounds.maxY) / 2} inches={bounds.maxY - guideBottomFace} side="bottom" />
+                <DimensionBubble x={guideWallMidpoint.x} y={(bounds.minY + guideTopFace) / 2} inches={guideTopFace - bounds.minY} label="from top" onClick={() => openDimension("Wall face from top", guideTopFace - bounds.minY, (value) => setWallOffset("top", value))} />
+                <DimensionBubble x={guideWallMidpoint.x} y={(guideBottomFace + bounds.maxY) / 2} inches={bounds.maxY - guideBottomFace} label={surface === "wall" ? "from floor" : "from bottom"} onClick={() => openDimension(surface === "wall" ? "Feature from finished floor" : "Wall face from bottom", bounds.maxY - guideBottomFace, (value) => setWallOffset("bottom", value))} />
               </g>}
               {drag?.kind === "draw" && <g className="draft-line" pointerEvents="none"><line x1={drag.start.x} y1={drag.start.y} x2={drag.current.x} y2={drag.current.y} strokeWidth={tool === "wall" ? wallThickness : 2.5} /><text x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + drag.current.y) / 2 - 4}>{formatLength(distance(drag.start, drag.current))}</text></g>}
               {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.x - drag.start.x) < 1 && <g className="draft-offset-guides" pointerEvents="none">
                 <line x1={bounds.minX} y1={(drag.start.y + drag.current.y) / 2} x2={drag.start.x - wallThickness / 2} y2={(drag.start.y + drag.current.y) / 2} />
                 <line x1={drag.start.x + wallThickness / 2} y1={(drag.start.y + drag.current.y) / 2} x2={bounds.maxX} y2={(drag.start.y + drag.current.y) / 2} />
-                <WallOffsetLabel x={(bounds.minX + drag.start.x - wallThickness / 2) / 2} y={(drag.start.y + drag.current.y) / 2} inches={drag.start.x - wallThickness / 2 - bounds.minX} side="left" />
-                <WallOffsetLabel x={(drag.start.x + wallThickness / 2 + bounds.maxX) / 2} y={(drag.start.y + drag.current.y) / 2} inches={bounds.maxX - drag.start.x - wallThickness / 2} side="right" />
+                <text x={(bounds.minX + drag.start.x - wallThickness / 2) / 2} y={(drag.start.y + drag.current.y) / 2}>{formatLength(drag.start.x - wallThickness / 2 - bounds.minX)} from left</text>
+                <text x={(drag.start.x + wallThickness / 2 + bounds.maxX) / 2} y={(drag.start.y + drag.current.y) / 2}>{formatLength(bounds.maxX - drag.start.x - wallThickness / 2)} from right</text>
               </g>}
               {drag?.kind === "draw" && tool === "wall" && Math.abs(drag.current.y - drag.start.y) < 1 && <g className="draft-offset-guides" pointerEvents="none">
                 <line x1={(drag.start.x + drag.current.x) / 2} y1={bounds.minY} x2={(drag.start.x + drag.current.x) / 2} y2={drag.start.y - wallThickness / 2} />
                 <line x1={(drag.start.x + drag.current.x) / 2} y1={drag.start.y + wallThickness / 2} x2={(drag.start.x + drag.current.x) / 2} y2={bounds.maxY} />
-                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={(bounds.minY + drag.start.y - wallThickness / 2) / 2} inches={drag.start.y - wallThickness / 2 - bounds.minY} side="top" />
-                <WallOffsetLabel x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + wallThickness / 2 + bounds.maxY) / 2} inches={bounds.maxY - drag.start.y - wallThickness / 2} side="bottom" />
+                <text x={(drag.start.x + drag.current.x) / 2} y={(bounds.minY + drag.start.y - wallThickness / 2) / 2}>{formatLength(drag.start.y - wallThickness / 2 - bounds.minY)} from top</text>
+                <text x={(drag.start.x + drag.current.x) / 2} y={(drag.start.y + wallThickness / 2 + bounds.maxY) / 2}>{formatLength(bounds.maxY - drag.start.y - wallThickness / 2)} from bottom</text>
               </g>}
               {draftRoom.length > 0 && <g className="draft-room" pointerEvents="none"><polyline points={draftPath} />{draftRoom.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="2" />)}</g>}
             </svg>
@@ -1313,21 +1599,51 @@ export function LayoutPlanner() {
             <div><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left / {formatLength(startRightReference)} from right</strong></div>
             <div><span>Horizontal chalk line</span><strong>{formatLength(startTopReference)} from top / {formatLength(startBottomReference)} from bottom</strong></div>
             <div><span>Material estimate</span><strong>{tileCount} tiles including {wastePercent}% waste · {mortarBags} × 50 lb mortar bags</strong></div>
+            <div><span>Pattern</span><strong>{pattern === "stack" ? "Straight stack" : pattern === "half" ? "½ running bond" : pattern === "third" ? "⅓ running bond" : pattern === "diagonal" ? "Diagonal" : "Herringbone"} · {method} layout</strong></div>
+            {referenceLine && <div><span>Shared wall reference</span><strong>{referenceLine}</strong></div>}
+            {niches.map((niche, index) => <div key={niche.id}><span>Niche {index + 1}</span><strong>{formatLength(niche.width)} × {formatLength(niche.height)} × {formatLength(niche.depth)} deep · {formatLength(bounds.maxY - niche.y - niche.height)} from finished floor · {formatLength(niche.x - bounds.minX)} from left · {niche.shelves.map((shelf) => `${formatLength(shelf.fromBottom)} shelf, ${formatLength(shelf.thickness)} thick`).join("; ")}</strong></div>)}
           </section>
         </section>
 
         <aside className="inspector">
+          <div className="workflow-steps" aria-label="Layout workflow"><span>1 Surface</span><span>2 Tile & pattern</span><span>3 Position</span><span>4 Cuts</span><span>5 Save / print</span></div>
+          {dimensionError && !dimensionEdit && <p className="edit-error" role="alert">{dimensionError}</p>}
+          {selectedNiche && <section className="panel selected-panel">
+            <div className="panel-heading"><span className="eyebrow">Selected niche</span><strong>Drag to move · handle to resize</strong></div>
+            <div className="dimension-action-grid">
+              {([
+                ["Width", selectedNiche.width, (value: number) => editNiche(selectedNiche.id, { width: value })],
+                ["Height", selectedNiche.height, (value: number) => editNiche(selectedNiche.id, { height: value })],
+                ["Depth", selectedNiche.depth, (value: number) => editNiche(selectedNiche.id, { depth: value })],
+                ["From left", selectedNiche.x - bounds.minX, (value: number) => editNiche(selectedNiche.id, { x: bounds.minX + value })],
+                ["From right", bounds.maxX - selectedNiche.x - selectedNiche.width, (value: number) => editNiche(selectedNiche.id, { x: bounds.maxX - value - selectedNiche.width })],
+                ["From floor", bounds.maxY - selectedNiche.y - selectedNiche.height, (value: number) => editNiche(selectedNiche.id, { y: bounds.maxY - value - selectedNiche.height })],
+              ] as [string, number, (value: number) => string | void][]).map(([label, value, commit]) =>
+                <button key={label} onClick={() => openDimension(`Niche ${label.toLowerCase()}`, value, commit)}><span>{label}</span><strong>{formatLength(value)}</strong></button>)}
+            </div>
+            <div className="shelf-heading"><strong>Shelves · {selectedNiche.shelves.length}</strong>
+              <button className="secondary" onClick={() => {
+                const shelf = { id: uid(), fromBottom: selectedNiche.height * (selectedNiche.shelves.length + 1) / (selectedNiche.shelves.length + 2), thickness: .5 };
+                snapshot(); setNiches((current) => current.map((item) => item.id === selectedNiche.id ? { ...item, shelves: [...item.shelves, shelf] } : item));
+              }}><Plus size={14} /> Add shelf</button></div>
+            {selectedNiche.shelves.map((shelf, index) => <div key={shelf.id} className="shelf-row">
+              <button onClick={() => openDimension(`Shelf ${index + 1} from niche sill`, shelf.fromBottom, (value) => updateShelf(selectedNiche, shelf.id, { fromBottom: value }))}>Shelf {index + 1}: {formatLength(shelf.fromBottom)} high</button>
+              <button onClick={() => openDimension(`Shelf ${index + 1} thickness`, shelf.thickness, (value) => updateShelf(selectedNiche, shelf.id, { thickness: value }))}>{formatLength(shelf.thickness)} thick</button>
+              <button aria-label={`Remove shelf ${index + 1}`} onClick={() => { snapshot(); setNiches((current) => current.map((item) => item.id === selectedNiche.id ? { ...item, shelves: item.shelves.filter((s) => s.id !== shelf.id) } : item)); }}><X size={14} /></button>
+            </div>)}
+            <button className="delete-button" onClick={() => { snapshot(); setNiches((current) => current.filter((item) => item.id !== selectedNiche.id)); setSelectedNicheId(null); }}>Delete niche</button>
+          </section>}
           {selected ? <section className="panel selected-panel">
             <div className="panel-heading"><span className="eyebrow">Selected</span><strong>{selected.type === "wall" ? (surface === "wall" ? "Feature line" : "Wall") : "Opening"}</strong></div>
             <NumberField label="Length" value={distance(selected.start, selected.end)} onChange={updateSelectedLength} suffix="in" min={1} />
-            <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => setItems((current) => current.map((item) => item.id === selected.id ? constrainWallToBounds({ ...item, thickness: value }, bounds) : item))} suffix="in" min={1} step={.5} />
+            <NumberField label={selected.type === "wall" ? "Thickness" : "Wall thickness"} value={selected.thickness} onChange={(value) => { snapshot(); setItems((current) => current.map((item) => item.id === selected.id ? constrainWallToBounds({ ...item, thickness: value }, bounds) : item)); }} suffix="in" min={1} step={.5} />
             {selected.type === "wall" && guideWallOrientation === "vertical" && <div className="field-row wall-offset-fields">
               <OffsetField label="From left" inches={guideLeftFace - bounds.minX} onCommit={(value) => setWallOffset("left", value)} />
               <OffsetField label="From right" inches={bounds.maxX - guideRightFace} onCommit={(value) => setWallOffset("right", value)} />
             </div>}
             {selected.type === "wall" && guideWallOrientation === "horizontal" && <div className="field-row wall-offset-fields">
               <OffsetField label="From top" inches={guideTopFace - bounds.minY} onCommit={(value) => setWallOffset("top", value)} />
-              <OffsetField label="From bottom" inches={bounds.maxY - guideBottomFace} onCommit={(value) => setWallOffset("bottom", value)} />
+              <OffsetField label={surface === "wall" ? "From finished floor" : "From bottom"} inches={bounds.maxY - guideBottomFace} onCommit={(value) => { const error = setWallOffset("bottom", value); if (error) setDimensionError(error); }} />
             </div>}
             {selected.type === "wall" && <p className="selection-hint">Drag the {surface === "wall" ? "feature" : "wall"} to reposition it. Gold dimensions measure from both surface borders to its nearest face. Use the fields above to enter an exact offset. The guides are visible only while it is selected.</p>}
             {selected.type === "opening" && <button className="favor-button" onClick={favorOpening}><Sparkles size={16} /> Favor this opening</button>}
@@ -1335,47 +1651,62 @@ export function LayoutPlanner() {
           </section> : <section className="panel">
             <div className="panel-heading"><span className="eyebrow">Surface</span><strong>{surfaceName} · {isRectangle(room) ? `${formatLength(roomWidth)} × ${formatLength(roomHeight)}` : "Custom shape"}</strong></div>
             <div className="surface-picker" aria-label="Tile surface">
-              <button className={surface === "floor" ? "active" : ""} aria-pressed={surface === "floor"} onClick={() => setSurface("floor")}>Floor</button>
-              <button className={surface === "wall" ? "active" : ""} aria-pressed={surface === "wall"} onClick={() => setSurface("wall")}>Wall</button>
+              <button className={surface === "floor" ? "active" : ""} aria-pressed={surface === "floor"} onClick={() => { snapshot(); setSurface("floor"); }}>Floor</button>
+              <button className={surface === "wall" ? "active" : ""} aria-pressed={surface === "wall"} onClick={() => { snapshot(); setSurface("wall"); }}>Wall</button>
             </div>
             <p className="surface-help">Each saved layout represents one tiled surface. Create another layout for each additional wall.</p>
+            {surface === "wall" && <><button className="primary" onClick={addNiche}><Plus size={16} /> Add niche</button>
+              <label className="field"><span>Shared grout reference for related shower walls</span><input value={referenceLine} placeholder="e.g. Back wall · 42 in above finished floor" onChange={(event) => { snapshot(); setReferenceLine(event.target.value); }} /></label>
+              <p className="surface-help">Wall height is measured from the finished floor; widths use inside finished faces. Give related walls the same reference and set the start line to that height.</p></>}
             {isRectangle(room) && <div className="field-row"><NumberField label="Width" value={roomWidth} onChange={(value) => resizeRectangle("width", value)} suffix="in" min={24} /><NumberField label={surface === "wall" ? "Height" : "Length"} value={roomHeight} onChange={(value) => resizeRectangle("height", value)} suffix="in" min={24} /></div>}
-            {surface === "floor" && <NumberField label="New wall thickness" value={wallThickness} onChange={setWallThickness} suffix="in" min={1} step={.5} />}
+            {surface === "floor" && <NumberField label="New wall thickness" value={wallThickness} onChange={(value) => { snapshot(); setWallThickness(value); }} suffix="in" min={1} step={.5} />}
           </section>}
 
           <section className="panel tile-panel">
-            <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>Tile layout</strong></span><label className="switch"><input aria-label="Show tile layout" type="checkbox" checked={showTile} onChange={(event) => setShowTile(event.target.checked)} /><span aria-hidden="true" /></label></div>
+            <div className="panel-heading inline-heading"><span><span className="eyebrow">Material</span><strong>Tile layout</strong></span><label className="switch"><input aria-label="Show tile layout" type="checkbox" checked={showTile} onChange={(event) => { snapshot(); setShowTile(event.target.checked); }} /><span aria-hidden="true" /></label></div>
             <div className="material-units" aria-label="Tile measurement unit">
-              {(["in", "mm", "cm"] as MaterialUnit[]).map((unit) => <button key={unit} className={materialUnit === unit ? "active" : ""} onClick={() => setMaterialUnit(unit)} aria-pressed={materialUnit === unit}>{unit}</button>)}
+              {(["in", "mm", "cm"] as MaterialUnit[]).map((unit) => <button key={unit} className={materialUnit === unit ? "active" : ""} onClick={() => { snapshot(); setMaterialUnit(unit); }} aria-pressed={materialUnit === unit}>{unit}</button>)}
             </div>
             <div className="field-row">
-              <NumberField label="Tile width" value={displayUnit(tileWidth, materialUnit)} onChange={(value) => setTileWidth(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={materialMin} step={materialStep} />
-              <NumberField label="Tile length" value={displayUnit(tileHeight, materialUnit)} onChange={(value) => setTileHeight(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={materialMin} step={materialStep} />
+              <NumberField label="Tile width" value={displayUnit(tileWidth, materialUnit)} onChange={(value) => { snapshot(); setTileWidth(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={materialMin} step={materialStep} />
+              <NumberField label="Tile length" value={displayUnit(tileHeight, materialUnit)} onChange={(value) => { snapshot(); setTileHeight(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={materialMin} step={materialStep} />
             </div>
-            <NumberField label="Grout joint" value={displayUnit(grout, materialUnit)} onChange={(value) => setGrout(inchesFromUnit(value, materialUnit))} suffix={materialUnit} min={groutMin} step={groutStep} />
-            <div className="appearance-field">
+            <NumberField label="Grout joint" value={displayUnit(grout, materialUnit)} onChange={(value) => { snapshot(); setGrout(inchesFromUnit(value, materialUnit)); }} suffix={materialUnit} min={groutMin} step={groutStep} />
+            <div className="pattern-picker"><strong>Pattern</strong><div className="pattern-options">
+              {([["stack", "Straight stack"], ["half", "½ running bond"], ["third", "⅓ running bond"], ["diagonal", "Diagonal"], ["herringbone", "Herringbone"]] as [TilePattern, string][]).map(([value, label]) => <button key={value} className={pattern === value ? "active" : ""} aria-pressed={pattern === value}
+                disabled={value === "herringbone" && Math.max(tileWidth, tileHeight) / Math.min(tileWidth, tileHeight) < 1.9}
+                onClick={() => { snapshot(); setPattern(value); }}>
+                <span className={`pattern-preview preview-${value}`} aria-hidden="true" /><span>{label}</span></button>)}
+            </div></div>
+            <div className="method-picker"><strong>Starting layout</strong>
+              {([["center", "Centered", "Similar cuts at both sides"], ["edge", "Reference edge", "Start at the left and finished floor"], ["balanced", "Reduce narrow cuts", "Checks edges and marked features"]] as [LayoutMethod, string, string][]).map(([value, label, help]) =>
+                <button key={value} className={method === value ? "active" : ""} onClick={() => chooseMethod(value)}><strong>{label}</strong><small>{help}</small></button>)}
+              <p>Drag the tile field or tap a start-line dimension to fine-tune any option.</p>
+            </div>
+            <details className="advanced-settings"><summary>Advanced material settings</summary><div className="appearance-field">
               <span>Tile appearance</span>
               <div className="appearance-options">
                 {([ ["transparent", "Clear"], ["porcelain", "Porcelain"], ["stone", "Stone"], ["marble", "Marble"], ["concrete", "Concrete"] ] as [TileAppearance, string][]).map(([value, label]) => (
-                  <button key={value} className={tileAppearance === value ? `active appearance-${value}` : `appearance-${value}`} onClick={() => setTileAppearance(value)} aria-pressed={tileAppearance === value}><span aria-hidden="true" />{label}</button>
+                  <button key={value} className={tileAppearance === value ? `active appearance-${value}` : `appearance-${value}`} onClick={() => { snapshot(); setTileAppearance(value); }} aria-pressed={tileAppearance === value}><span aria-hidden="true" />{label}</button>
                 ))}
               </div>
-            </div>
-            <div className="button-row"><button className="secondary" onClick={() => setRotation((value) => value === 0 ? 90 : 0)}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Optimize cuts</button></div>
+            </div></details>
+            <div className="button-row"><button className="secondary" onClick={() => { snapshot(); setRotation((value) => value === 0 ? 90 : 0); }}><RotateCw size={16} /> Rotate 90°</button><button className="primary" onClick={autoBalance}><Sparkles size={16} /> Optimize cuts</button></div>
             <button className={`grab-floor-button ${tool === "floor" ? "active" : ""}`} onClick={() => { setShowTile(true); setTool("floor"); setSelectedId(null); }}><Move size={16} /> {tool === "floor" ? `Drag the ${surfaceNameLower} tile field` : "Grab and move tile field"}</button>
-            <div className="nudge-control"><span>Precision adjustment · 1/4″</span><div><button onClick={() => setOrigin((point) => ({ ...point, x: point.x - .25 }))} aria-label="Move layout left">←</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y - .25 }))} aria-label="Move layout up">↑</button><button onClick={() => setOrigin((point) => ({ ...point, y: point.y + .25 }))} aria-label="Move layout down">↓</button><button onClick={() => setOrigin((point) => ({ ...point, x: point.x + .25 }))} aria-label="Move layout right">→</button></div></div>
+            <div className="nudge-control"><span>Precision adjustment · 1/4″</span><div><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, x: point.x - .25 })); }} aria-label="Move layout left">←</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, y: point.y - .25 })); }} aria-label="Move layout up">↑</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, y: point.y + .25 })); }} aria-label="Move layout down">↓</button><button onClick={() => { snapshot(); setOrigin((point) => ({ ...point, x: point.x + .25 })); }} aria-label="Move layout right">→</button></div></div>
+            {surface === "wall" && <label className="snap-control"><input type="checkbox" checked={snapNiche} onChange={(event) => setSnapNiche(event.target.checked)} /> Snap niche edges to grout lines while dragging</label>}
           </section>
 
           <section className="panel results-panel">
             <div className="panel-heading inline-heading"><span><span className="eyebrow">Layout check</span><strong>{cutWarning ? "Review edge cuts" : "Cuts look balanced"}</strong></span><span className={`result-icon ${cutWarning ? "warning" : ""}`}>{cutWarning ? "!" : <Check size={17} />}</span></div>
-            <div className="metrics"><div><span>{surfaceName} area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest planned cut</span><strong>{minimumCut.toFixed(1)} in</strong></div></div>
+            <div className="metrics"><div><span>{surfaceName} area</span><strong>{areaSqFt.toFixed(1)} ft²</strong></div><div><span>Tile + {wastePercent}%</span><strong>{tileCount} pcs</strong></div><div><span>Smallest planned cut</span><strong>{estimatedCuts ? "Review on drawing" : `${minimumCut.toFixed(1)} in`}</strong></div></div>
             <div className="start-reference-card"><span>Vertical chalk line</span><strong>{formatLength(startLeftReference)} from left · {formatLength(startRightReference)} from right</strong><span>Horizontal chalk line</span><strong>{formatLength(startTopReference)} from top · {formatLength(startBottomReference)} from bottom</strong></div>
-            <p>{cutWarning ? `A ${surfaceNameLower} edge, feature, or opening may create a cut below half a tile. Use Optimize cuts, drag the tile field, or nudge it precisely.` : `The current tile position avoids small cuts across the ${surfaceNameLower} edges, features, and openings being checked.`}</p>
+            <p>{estimatedCuts ? "Diagonal and herringbone cut sizes need a manual check on the drawing before installation." : cutWarning ? `A ${surfaceNameLower} edge, feature, or opening may create a cut below half a tile. Use Optimize cuts, drag the tile field, or nudge it precisely.` : `The current tile position avoids small cuts across the ${surfaceNameLower} edges, features, and openings being checked.`}</p>
           </section>
 
           <section className="panel install-panel">
             <div className="panel-heading"><span className="eyebrow">Install setup</span><strong>{mortar.trowel}</strong></div>
-            <div className="install-metrics"><div><span>Mortar estimate</span><strong>{mortarBags} × 50 lb bags</strong></div><div><span>Waste allowance</span><NumberField label="Waste allowance" value={wastePercent} onChange={setWastePercent} suffix="%" min={0} step={1} /></div></div>
+            <div className="install-metrics"><div><span>Mortar estimate</span><strong>{mortarBags} × 50 lb bags</strong></div><div><span>Waste allowance</span><NumberField label="Waste allowance" value={wastePercent} onChange={(value) => { snapshot(); setWastePercent(value); }} suffix="%" min={0} step={1} /></div></div>
             <p>Planning estimate based on about {mortar.coverage} ft² per bag. Confirm the mortar manufacturer&apos;s coverage and the trowel required for the tile back, substrate flatness, and required mortar coverage; back-buttering can increase usage.</p>
           </section>
         </aside>
@@ -1389,3 +1720,4 @@ export function LayoutPlanner() {
     </main>
   );
 }
+
